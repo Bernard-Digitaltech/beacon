@@ -1,0 +1,1262 @@
+package com.xenber.frontend_v2
+
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.AlarmManager
+import android.content.Context
+import android.content.Intent
+import android.content.SharedPreferences
+import android.media.AudioAttributes
+import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
+import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
+import io.flutter.plugin.common.EventChannel
+import org.altbeacon.beacon.*
+import org.altbeacon.beacon.startup.BootstrapNotifier
+import org.altbeacon.beacon.startup.RegionBootstrap
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.concurrent.thread
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * BeaconApplication - Enhanced for Maximum Survival
+ * 
+ * Techniques Implemented:
+ * 1. ✅ FIX: setEnableScheduledScanJobs(false) - CRITICAL
+ * 2. ✅ PARTIAL_WAKE_LOCK - Prevents CPU sleep
+ * 3. ✅ RegionBootstrap - Auto-restart on boot/region
+ * 4. ✅ Battery Optimization Exemption Request - Ask user to exempt app
+ * 5. ✅ Watchdog Timer - Periodic check to verify service alive
+ * 
+ * References:
+ * - https://altbeacon.github.io/android-beacon-library/foreground-service.html
+ * - https://developer.android.com/training/monitoring-device-state/doze-standby
+ * - https://dontkillmyapp.com/samsung
+ * - https://robertohuertas.com/2019/06/29/android_foreground_services/
+ */
+class BeaconApplication : Application(), BootstrapNotifier, RangeNotifier {
+
+    companion object {
+        private const val TAG = "BeaconApp"
+        
+        lateinit var instance: BeaconApplication
+            private set
+        
+        // ============================================================
+        // ⚙️ FIXED TIMING SETTINGS (NO MORE SCAN MODE)
+        // ============================================================
+        
+        private const val SCAN_PERIOD = 1100L           // How long each scan lasts
+        private const val BETWEEN_SCAN_PERIOD = 5000L   // 5 seconds between scans
+        private const val NOTIFICATION_COOLDOWN_MS = 5000L  // 5 seconds rest time
+        
+        // Detection settings
+        // private const val RSSI_THRESHOLD = -85          // Signal strength threshold
+        // private const val TIME_THRESHOLD_SECONDS = 2    // Time required near beacon
+        private const val RSSI_BUFFER_SIZE = 5          // RSSI readings to average
+        
+        private const val MAX_BEACON_NOTIFICATIONS = 5
+        
+        // Watchdog settings
+        private const val WATCHDOG_INTERVAL_MS = 5 * 60 * 1000L  // 5 minutes
+        
+        // Notification channels
+        private const val FOREGROUND_SERVICE_CHANNEL = "beacon_foreground_service"
+        private const val ALERT_CHANNEL = "beacon_detection_alert"
+        private const val FOREGROUND_SERVICE_ID = 456
+
+        private const val EXTERNAL_TRIGGER_NOTI_ID = 1001 
+        
+        // Persistence keys
+        private const val PREF_TARGET_BEACONS = "target_beacons_json"
+        private const val PREF_IS_MONITORING = "is_monitoring"
+        private const val PREF_SERVICE_RESTART_COUNT = "service_restart_count"
+        private const val PREF_GATEWAY_URL = "gateway_url"
+        private const val PREF_USER_ID = "user_id"
+    }
+
+    // Dynamic Config
+    private var gatewayUrl: String = ""
+    private var currentUserId: String = "unknown"
+    private var dynamicRssiThreshold: Int = -85
+    private var dynamicTimeThresholdSeconds: Int = 2
+    private val gatewayToken = "bXA1qpdcDDPvRWYZ3lBDJvZibnC8uxAM3bkMntTV26077dc7"
+
+    lateinit var beaconManager: BeaconManager
+        private set
+    
+    private var eventSink: EventChannel.EventSink? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    
+    private var regionBootstrap: RegionBootstrap? = null
+    private var monitoringRegion: Region? = null
+    
+    // WakeLock
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var isWakeLockAcquired = false
+    
+    // Watchdog Timer
+    private var watchdogRunnable: Runnable? = null
+    private var isWatchdogRunning = false
+    private var serviceRestartCount = 0
+    
+    // Target beacons
+    private val targetBeacons = mutableMapOf<String, String>()
+    private var isCurrentlyMonitoring = false
+    private var isInForeground = true
+    
+    // Detection state
+    private val rssiBuffers = mutableMapOf<String, MutableList<Int>>()
+    private val detectionStartTimes = mutableMapOf<String, Long>()
+    private val notificationCounts = mutableMapOf<String, Int>()
+    private val beaconLastSeen = mutableMapOf<String, Long>()
+    private val collectedDetections = mutableListOf<Map<String, Any>>()
+    
+    // ============================================================
+    // 🔔 NOTIFICATION TRACKING (for limit management)
+    // ============================================================
+    private val activeNotificationIds = mutableListOf<Int>()
+    
+    private lateinit var prefs: SharedPreferences
+    private var haveDetectedBeaconsSinceBoot = false
+
+    // ============================================================
+    // APPLICATION LIFECYCLE
+    // ============================================================
+    
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+        prefs = getSharedPreferences("beacon_prefs", Context.MODE_PRIVATE)
+        
+        // Load restart count
+        serviceRestartCount = prefs.getInt(PREF_SERVICE_RESTART_COUNT, 0)
+        
+        gatewayUrl = (prefs.getString(PREF_GATEWAY_URL, "http://192.168.68.61:8000/api/v1/detection/report") ?: "").trim()
+        currentUserId = (prefs.getString(PREF_USER_ID, "unknown") ?: "unknown").trim()
+        
+        logToTerminal("🚀 [Native] BeaconApplication Starting...")
+        logToTerminal("═══════════════════════════════════════════════════")
+        logToTerminal("⚡ [Native] Scan interval: ${BETWEEN_SCAN_PERIOD/1000} seconds (FIXED)")
+        logToTerminal("⏱️ [Native] Notification cooldown: ${NOTIFICATION_COOLDOWN_MS/1000} seconds")
+        logToTerminal("🔔 [Native] Notification limit: $MAX_BEACON_NOTIFICATIONS (auto-remove oldest)")
+        logToTerminal("🔄 [Native] Service restart count: $serviceRestartCount")
+        logToTerminal("═══════════════════════════════════════════════════")
+        
+        setupLifecycleObserver()
+        createNotificationChannels()
+        initializeBeaconManager()
+        restoreTargetsFromPrefs()
+        checkBatteryOptimizationStatus()
+        
+        val wasMonitoring = prefs.getBoolean(PREF_IS_MONITORING, false)
+        if (wasMonitoring && targetBeacons.isNotEmpty()) {
+            logToTerminal("🔄 [Native] Auto-starting monitoring (was active before)")
+            
+            // Increment restart count
+            serviceRestartCount++
+            prefs.edit().putInt(PREF_SERVICE_RESTART_COUNT, serviceRestartCount).apply()
+            
+            startMonitoringWithBootstrap()
+        }
+        
+        logToTerminal("✅ [Native] BeaconApplication initialized")
+    }
+    
+    override fun onTerminate() {
+        super.onTerminate()
+        stopWatchdog()
+        releaseWakeLock()
+    }
+
+    private fun setupLifecycleObserver() {
+        ProcessLifecycleOwner.get().lifecycle.addObserver(object : LifecycleEventObserver {
+            override fun onStateChanged(source: LifecycleOwner, event: Lifecycle.Event) {
+                when (event) {
+                    Lifecycle.Event.ON_START -> {
+                        isInForeground = true
+                        logToTerminal("📱 [Native] App → Foreground")
+                    }
+                    Lifecycle.Event.ON_STOP -> {
+                        isInForeground = false
+                        logToTerminal("📱 [Native] App → Background")
+                        logToTerminal("🔒 [Native] Foreground Service should keep scanning...")
+                    }
+                    else -> { /* Ignore */ }
+                }
+            }
+        })
+        logToTerminal("👁️ [Native] Lifecycle observer registered")
+    }
+
+    // ============================================================
+    // 🔋 BATTERY OPTIMIZATION (Technique #4)
+    // Reference: https://developer.android.com/training/monitoring-device-state/doze-standby
+    // ============================================================
+    
+    /**
+     * Check if battery optimization is disabled for this app
+     */
+    fun isBatteryOptimizationDisabled(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            return powerManager.isIgnoringBatteryOptimizations(packageName)
+        }
+        return true // Not applicable for older versions
+    }
+    
+    /**
+     * Request user to disable battery optimization
+     * This is critical for Samsung devices!
+     * Reference: https://dontkillmyapp.com/samsung
+     */
+    fun requestBatteryOptimizationExemption(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!isBatteryOptimizationDisabled()) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
+                    logToTerminal("🔋 [Native] Battery optimization exemption requested")
+                    return true
+                } catch (e: Exception) {
+                    logToTerminal("❌ [Native] Failed to request battery exemption: ${e.message}")
+                    // Fallback: open battery optimization settings
+                    openBatteryOptimizationSettings()
+                }
+            } else {
+                logToTerminal("✅ [Native] Battery optimization already disabled")
+            }
+        }
+        return false
+    }
+    
+    /**
+     * Open battery optimization settings (fallback)
+     */
+    fun openBatteryOptimizationSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+            logToTerminal("🔋 [Native] Opened battery optimization settings")
+        } catch (e: Exception) {
+            logToTerminal("❌ [Native] Failed to open settings: ${e.message}")
+        }
+    }
+    
+    private fun checkBatteryOptimizationStatus() {
+        val isDisabled = isBatteryOptimizationDisabled()
+        if (isDisabled) {
+            logToTerminal("✅ [Native] Battery optimization: DISABLED (Good!)")
+        } else {
+            logToTerminal("⚠️ [Native] Battery optimization: ENABLED (App may be killed!)")
+            logToTerminal("💡 [Native] Call requestBatteryOptimizationExemption() to fix")
+        }
+    }
+
+    // ============================================================
+    // ⏰ WATCHDOG TIMER (Technique #5)
+    // Reference: https://solutionschecker.com/questions/android-keeping-a-background-service-alive-preventing-process-death/
+    // ============================================================
+    
+    private fun startWatchdog() {
+        if (isWatchdogRunning) {
+            logToTerminal("⏰ [Native] Watchdog already running")
+            return
+        }
+        
+        watchdogRunnable = object : Runnable {
+            override fun run() {
+                checkAndRestoreMonitoring()
+                mainHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
+            }
+        }
+        
+        mainHandler.postDelayed(watchdogRunnable!!, WATCHDOG_INTERVAL_MS)
+        isWatchdogRunning = true
+        logToTerminal("⏰ [Native] Watchdog STARTED (checks every ${WATCHDOG_INTERVAL_MS/1000/60} min)")
+    }
+    
+    private fun stopWatchdog() {
+        watchdogRunnable?.let { mainHandler.removeCallbacks(it) }
+        watchdogRunnable = null
+        isWatchdogRunning = false
+        logToTerminal("⏰ [Native] Watchdog STOPPED")
+    }
+    
+    /**
+     * Watchdog check - verify monitoring is still active
+     */
+    private fun checkAndRestoreMonitoring() {
+        val shouldBeMonitoring = prefs.getBoolean(PREF_IS_MONITORING, false)
+        
+        logToTerminal("⏰ [Native] Watchdog check: shouldMonitor=$shouldBeMonitoring, isMonitoring=$isCurrentlyMonitoring")
+        
+        if (shouldBeMonitoring && !isCurrentlyMonitoring) {
+            logToTerminal("⚠️ [Native] Watchdog detected monitoring stopped! Restarting...")
+            serviceRestartCount++
+            prefs.edit().putInt(PREF_SERVICE_RESTART_COUNT, serviceRestartCount).apply()
+            startMonitoringWithBootstrap()
+        } else if (shouldBeMonitoring && isCurrentlyMonitoring) {
+            logToTerminal("✅ [Native] Watchdog: All OK - monitoring active")
+            
+            // Also verify WakeLock
+            if (!isWakeLockAcquired) {
+                logToTerminal("⚠️ [Native] Watchdog: WakeLock lost! Re-acquiring...")
+                acquireWakeLock()
+            }
+        }
+        
+        // Log battery status
+        checkBatteryOptimizationStatus()
+    }
+
+    // ============================================================
+    // 🔒 WAKELOCK MANAGEMENT (Technique #2)
+    // Reference: https://developer.android.com/develop/background-work/background-tasks/awake/wakelock/set
+    // ============================================================
+    
+    private fun acquireWakeLock() {
+        if (isWakeLockAcquired) {
+            logToTerminal("⚠️ [Native] WakeLock already acquired")
+            return
+        }
+        
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "BeaconApp::BeaconScanWakeLock"
+            ).apply {
+                // Acquire for 24 hours (will be released on stopMonitoring)
+                acquire(24 * 60 * 60 * 1000L)
+            }
+            
+            isWakeLockAcquired = true
+            logToTerminal("🔒 [Native] WakeLock ACQUIRED (PARTIAL_WAKE_LOCK)")
+            
+        } catch (e: Exception) {
+            logToTerminal("❌ [Native] Failed to acquire WakeLock: ${e.message}")
+        }
+    }
+    
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                    logToTerminal("🔓 [Native] WakeLock RELEASED")
+                }
+            }
+            wakeLock = null
+            isWakeLockAcquired = false
+        } catch (e: Exception) {
+            logToTerminal("⚠️ [Native] Error releasing WakeLock: ${e.message}")
+        }
+    }
+
+    // ============================================================
+    // 💾 PERSISTENCE
+    // ============================================================
+    
+    private fun saveTargetsToPrefs() {
+        try {
+            val jsonArray = JSONArray()
+            for ((mac, name) in targetBeacons) {
+                val obj = JSONObject()
+                obj.put("mac", mac)
+                obj.put("name", name)
+                jsonArray.put(obj)
+            }
+            prefs.edit()
+                .putString(PREF_TARGET_BEACONS, jsonArray.toString())
+                .apply()
+            
+            logToTerminal("💾 [Native] Targets saved (${targetBeacons.size})")
+        } catch (e: Exception) {
+            logToTerminal("❌ [Native] Failed to save targets: ${e.message}")
+        }
+    }
+    
+    private fun restoreTargetsFromPrefs() {
+        logToTerminal("🔄 [Native] Checking for saved targets...")
+        
+        val targetsJson = prefs.getString(PREF_TARGET_BEACONS, null)
+        if (targetsJson != null && targetsJson.isNotEmpty()) {
+            try {
+                val jsonArray = JSONArray(targetsJson)
+                targetBeacons.clear()
+                
+                for (i in 0 until jsonArray.length()) {
+                    val obj = jsonArray.getJSONObject(i)
+                    val mac = obj.getString("mac")
+                    val name = obj.getString("name")
+                    targetBeacons[mac] = name
+                }
+                
+                logToTerminal("✅ [Native] Restored ${targetBeacons.size} target(s)")
+                for ((mac, name) in targetBeacons) {
+                    logToTerminal("   📍 $name ($mac)")
+                }
+                
+            } catch (e: Exception) {
+                logToTerminal("⚠️ [Native] Failed to restore: ${e.message}")
+            }
+        } else {
+            logToTerminal("ℹ️ [Native] No saved targets found")
+        }
+    }
+    
+    private fun saveMonitoringState(isMonitoring: Boolean) {
+        prefs.edit()
+            .putBoolean(PREF_IS_MONITORING, isMonitoring)
+            .apply()
+    }
+
+    // ============================================================
+    // 🔧 BEACON MANAGER SETUP
+    // ============================================================
+    
+    private fun initializeBeaconManager() {
+        logToTerminal("🔧 [Native] Initializing BeaconManager...")
+
+        BeaconManager.setDebug(true)
+        org.altbeacon.beacon.logging.LogManager.setVerboseLoggingEnabled(true)
+        
+        beaconManager = BeaconManager.getInstanceForApplication(this)
+        
+        beaconManager.beaconParsers.clear()
+        beaconManager.beaconParsers.add(
+            BeaconParser("AltBeacon").setBeaconLayout(BeaconParser.ALTBEACON_LAYOUT)
+        )
+        beaconManager.beaconParsers.add(
+            BeaconParser("iBeacon").setBeaconLayout("m:2-3=0215,i:4-19,i:20-21,i:22-23,p:24-24")
+        )
+        beaconManager.beaconParsers.add(
+            BeaconParser("Eddystone-UID").setBeaconLayout(BeaconParser.EDDYSTONE_UID_LAYOUT)
+        )
+        
+        // ╔═══════════════════════════════════════════════════════════════════╗
+        // ║  🔥 CRITICAL FIX: MUST disable scheduled scan jobs!               ║
+        // ║                                                                   ║
+        // ║  When TRUE: Uses JobScheduler (easily killed by system)           ║
+        // ║  When FALSE: Uses Foreground Service (survives in background)     ║
+        // ║                                                                   ║
+        // ║  Reference: https://altbeacon.github.io/android-beacon-library/   ║
+        // ║             foreground-service.html                               ║
+        // ╚═══════════════════════════════════════════════════════════════════╝
+        beaconManager.setEnableScheduledScanJobs(false)  // ← CRITICAL: MUST BE FALSE!
+        logToTerminal("✅ [Native] ScheduledScanJobs DISABLED (using Foreground Service)")
+        
+        // Setup foreground service AFTER disabling scheduled jobs
+        setupForegroundService()
+        
+        // Set scan periods (same for foreground and background since we use FGS)
+        beaconManager.foregroundScanPeriod = SCAN_PERIOD
+        beaconManager.foregroundBetweenScanPeriod = BETWEEN_SCAN_PERIOD
+        beaconManager.backgroundScanPeriod = SCAN_PERIOD
+        beaconManager.backgroundBetweenScanPeriod = BETWEEN_SCAN_PERIOD
+        
+        logToTerminal("🔧 [Native] BeaconManager ready:")
+        logToTerminal("   📡 Scan period: ${SCAN_PERIOD}ms")
+        logToTerminal("   ⏱️ Between scans: ${BETWEEN_SCAN_PERIOD}ms")
+        logToTerminal("   🔄 ScheduledScanJobs: DISABLED")
+        logToTerminal("   🟢 ForegroundService: ENABLED")
+    }
+    
+    private fun setupForegroundService() {
+        try {
+            val notification = createForegroundServiceNotification()
+            beaconManager.enableForegroundServiceScanning(notification, FOREGROUND_SERVICE_ID)
+            logToTerminal("✅ [Native] Foreground Service Scanning ENABLED")
+            logToTerminal("   📢 Persistent notification will show when monitoring")
+        } catch (e: Exception) {
+            logToTerminal("❌ [Native] Foreground service setup failed: ${e.message}")
+        }
+    }
+    
+    private fun createForegroundServiceNotification(): Notification {
+        val intent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        return NotificationCompat.Builder(this, FOREGROUND_SERVICE_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("🔍 Beacon Monitor Active")
+            .setContentText("Scanning every ${BETWEEN_SCAN_PERIOD/1000}s | Targets: ${targetBeacons.size}")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("Monitoring ${targetBeacons.size} beacon location(s)\nScan interval: ${BETWEEN_SCAN_PERIOD/1000}s\nService restarts: $serviceRestartCount"))
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setContentIntent(pendingIntent)
+            .build()
+    }
+    
+    /**
+     * Update foreground notification with current status
+     */
+    private fun updateForegroundNotification() {
+        try {
+            val notification = createForegroundServiceNotification()
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.notify(FOREGROUND_SERVICE_ID, notification)
+        } catch (e: Exception) {
+            logToTerminal("⚠️ [Native] Failed to update foreground notification: ${e.message}")
+        }
+    }
+
+    // ============================================================
+    // 📢 NOTIFICATION CHANNELS
+    // ============================================================
+    
+    private fun createNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            
+            // Delete old channel if exists
+            try {
+                manager.deleteNotificationChannel("attendance_alert_channel")
+            } catch (e: Exception) { /* Ignore */ }
+            
+            // Foreground service channel (low priority, no sound)
+            val foregroundChannel = NotificationChannel(
+                FOREGROUND_SERVICE_CHANNEL,
+                "Beacon Monitoring Service",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows when beacon monitoring is active"
+                setShowBadge(false)
+            }
+            
+            // Alert channel (high priority with sound/vibration)
+            val alertChannel = NotificationChannel(
+                ALERT_CHANNEL,
+                "Beacon Detection Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Alerts when you are near a registered beacon"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500)
+                enableLights(true)
+                lightColor = android.graphics.Color.BLUE
+                
+                val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                val audioAttributes = AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                    .build()
+                setSound(soundUri, audioAttributes)
+                
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setShowBadge(true)
+                setBypassDnd(false)
+            }
+            
+            manager.createNotificationChannel(foregroundChannel)
+            manager.createNotificationChannel(alertChannel)
+            
+            logToTerminal("📢 [Native] Notification channels created")
+        }
+    }
+
+    // ============================================================
+    // 🎯 TARGET BEACON MANAGEMENT
+    // ============================================================
+    
+    fun addTargetBeacon(macAddress: String, locationName: String) {
+        val normalizedMac = macAddress.uppercase()
+        targetBeacons[normalizedMac] = locationName
+        saveTargetsToPrefs()
+        updateForegroundNotification()
+        logToTerminal("➕ [Native] Target added: $normalizedMac ($locationName)")
+    }
+    
+    fun clearTargetBeacons() {
+        stopMonitoring()
+        targetBeacons.clear()
+        prefs.edit()
+            .remove(PREF_TARGET_BEACONS)
+            .remove(PREF_IS_MONITORING)
+            .apply()
+        logToTerminal("🗑️ [Native] All targets cleared")
+    }
+
+    // ============================================================
+    // 🟢 MONITORING CONTROL
+    // ============================================================
+    
+    fun startMonitoring(config: Map<String, Any>) {
+
+        val rawUrl = config["gatewayUrl"] as? String ?: ""
+        val rawUser = config["userId"] as? String ?: "unknown"
+
+        this.gatewayUrl = rawUrl.trim()
+        this.currentUserId = rawUser.trim()
+        this.dynamicRssiThreshold = config["rssiThreshold"] as? Int ?: -85
+        this.dynamicTimeThresholdSeconds = config["timeThreshold"] as? Int ?: 2
+
+        prefs.edit().apply {
+            putString(PREF_GATEWAY_URL, gatewayUrl)
+            putString(PREF_USER_ID, currentUserId)
+        }.apply()
+        
+        if (targetBeacons.isEmpty()) {
+            logToTerminal("⚠️ [Native] No target beacons!")
+            return
+        }
+        
+        if (isCurrentlyMonitoring) {
+            logToTerminal("⚠️ [Native] Already monitoring")
+            return
+        }
+        
+        startMonitoringWithBootstrap()
+    }
+    
+    private fun startMonitoringWithBootstrap() {
+        logToTerminal("═══════════════════════════════════════════════════")
+        logToTerminal("🟢 [Native] Starting monitoring...")
+        logToTerminal("🎯 [Native] Targets: ${targetBeacons.size}")
+        
+        acquireWakeLock()
+        
+        monitoringRegion = Region("all-beacons-region", null, null, null)
+        
+        try {
+            regionBootstrap?.disable()
+            regionBootstrap = RegionBootstrap(this, monitoringRegion!!)
+            beaconManager.addRangeNotifier(this)
+            
+            isCurrentlyMonitoring = true
+            saveMonitoringState(true)
+            
+            // Start watchdog timer
+            startWatchdog()
+            
+            // Update foreground notification
+            updateForegroundNotification()
+            
+            logToTerminal("═══════════════════════════════════════════════════")
+            logToTerminal("✅ [Native] Monitoring STARTED")
+            logToTerminal("   📡 Scan interval: ${BETWEEN_SCAN_PERIOD/1000}s")
+            logToTerminal("   ⏱️ Cooldown: ${NOTIFICATION_COOLDOWN_MS/1000}s")
+            logToTerminal("   🔒 WakeLock: ${if (isWakeLockAcquired) "Active" else "Inactive"}")
+            logToTerminal("   🔋 Battery optimized: ${if (isBatteryOptimizationDisabled()) "NO (Good!)" else "YES (Risk!)"}")
+            logToTerminal("   ⏰ Watchdog: Active")
+            logToTerminal("   🔄 Restart count: $serviceRestartCount")
+            logToTerminal("═══════════════════════════════════════════════════")
+            
+            sendEventToFlutter(mapOf(
+                "event" to "monitoringStarted",
+                "targetCount" to targetBeacons.size,
+                "scanInterval" to BETWEEN_SCAN_PERIOD,
+                "cooldown" to NOTIFICATION_COOLDOWN_MS,
+                "notificationLimit" to MAX_BEACON_NOTIFICATIONS,
+                "autoRestartEnabled" to true,
+                "wakeLockActive" to isWakeLockAcquired,
+                "batteryOptimizationDisabled" to isBatteryOptimizationDisabled(),
+                "serviceRestartCount" to serviceRestartCount
+            ))
+            
+        } catch (e: Exception) {
+            logToTerminal("❌ [Native] Failed to start: ${e.message}")
+            releaseWakeLock()
+        }
+    }
+    
+    fun stopMonitoring() {
+        logToTerminal("🔴 [Native] Stopping monitoring...")
+        
+        // Stop watchdog
+        stopWatchdog()
+        
+        try {
+            regionBootstrap?.disable()
+            regionBootstrap = null
+            beaconManager.removeRangeNotifier(this)
+            
+            monitoringRegion?.let { region ->
+                try {
+                    beaconManager.stopRangingBeacons(region)
+                } catch (e: Exception) { /* Ignore */ }
+            }
+            
+        } catch (e: Exception) {
+            logToTerminal("⚠️ [Native] Error stopping: ${e.message}")
+        }
+        
+        releaseWakeLock()
+        
+        isCurrentlyMonitoring = false
+        monitoringRegion = null
+        
+        rssiBuffers.clear()
+        detectionStartTimes.clear()
+        beaconLastSeen.clear()
+        
+        saveMonitoringState(false)
+        
+        logToTerminal("✅ [Native] Monitoring STOPPED")
+        sendEventToFlutter(mapOf("event" to "monitoringStopped"))
+    }
+
+    // ============================================================
+    // 📡 BOOTSTRAP NOTIFIER CALLBACKS
+    // ============================================================
+    
+    override fun didEnterRegion(region: Region?) {
+        logToTerminal("🟢 [Native] ENTERED REGION")
+        
+        if (!haveDetectedBeaconsSinceBoot) {
+            haveDetectedBeaconsSinceBoot = true
+            logToTerminal("📱 [Native] First detection since boot/restart")
+        }
+        
+        try {
+            beaconManager.startRangingBeacons(region!!)
+        } catch (e: Exception) {
+            logToTerminal("⚠️ [Native] Error starting ranging: ${e.message}")
+        }
+        
+        sendEventToFlutter(mapOf(
+            "event" to "regionEnter",
+            "regionId" to (region?.uniqueId ?: "unknown"),
+            "timestamp" to System.currentTimeMillis(),
+            "wasBackgroundRestart" to !isInForeground
+        ))
+    }
+    
+    override fun didExitRegion(region: Region?) {
+        logToTerminal("🔴 [Native] EXITED REGION")
+        
+        try {
+            beaconManager.stopRangingBeacons(region!!)
+        } catch (e: Exception) { /* Ignore */ }
+        
+        sendEventToFlutter(mapOf(
+            "event" to "regionExit",
+            "regionId" to (region?.uniqueId ?: "unknown"),
+            "timestamp" to System.currentTimeMillis()
+        ))
+    }
+    
+    override fun didDetermineStateForRegion(state: Int, region: Region?) {
+        val stateStr = if (state == MonitorNotifier.INSIDE) "INSIDE" else "OUTSIDE"
+        logToTerminal("📍 [Native] Region state: $stateStr")
+        
+        if (state == MonitorNotifier.INSIDE) {
+            try {
+                beaconManager.startRangingBeacons(region!!)
+            } catch (e: Exception) {
+                logToTerminal("⚠️ [Native] Error starting ranging: ${e.message}")
+            }
+        }
+    }
+
+    // ============================================================
+    // 📡 RANGE NOTIFIER CALLBACK
+    // ============================================================
+    
+    override fun didRangeBeaconsInRegion(beacons: MutableCollection<Beacon>?, region: Region?) {
+        if (beacons == null || beacons.isEmpty()) return
+        
+        val now = System.currentTimeMillis()
+        val stateStr = if (isInForeground) "FG" else "BG"
+        
+        logToTerminal("📡 [Native][$stateStr] Ranged ${beacons.size} beacon(s)")
+        
+        for (beacon in beacons) {
+            val mac = beacon.bluetoothAddress.uppercase()
+            
+            if (!targetBeacons.containsKey(mac)) continue
+            
+            val locationName = targetBeacons[mac] ?: continue
+            val rssi = beacon.rssi
+            
+            beaconLastSeen[mac] = now
+            
+            val buffer = rssiBuffers.getOrPut(mac) { mutableListOf() }
+            buffer.add(rssi)
+            if (buffer.size > RSSI_BUFFER_SIZE) {
+                buffer.removeAt(0)
+            }
+            
+            val avgRssi = buffer.average()
+            
+            logToTerminal("🎯 [Native] TARGET: $locationName | RSSI: $rssi (avg: ${avgRssi.toInt()}) | ${if (avgRssi >= dynamicRssiThreshold) "✅" else "⚠️"}")
+            
+            sendEventToFlutter(mapOf(
+                "event" to "beaconRanged",
+                "macAddress" to mac,
+                "locationName" to locationName,
+                "rssi" to rssi,
+                "avgRssi" to avgRssi.toInt(),
+                "timestamp" to now,
+                "isBackground" to !isInForeground
+            ))
+            
+            if (avgRssi >= dynamicRssiThreshold) {
+                processStrongSignal(mac, locationName, avgRssi)
+            } else {
+                detectionStartTimes.remove(mac)
+            }
+        }
+        
+        checkLostBeacons(now)
+    }
+    
+    private fun processStrongSignal(mac: String, locationName: String, avgRssi: Double) {
+        val now = System.currentTimeMillis()
+        
+        if (!detectionStartTimes.containsKey(mac)) {
+            detectionStartTimes[mac] = now
+            logToTerminal("⏱️ [Native] Timer STARTED for $locationName")
+        }
+        
+        val startTime = detectionStartTimes[mac]!!
+        val durationSeconds = (now - startTime) / 1000
+        
+        if (durationSeconds >= dynamicTimeThresholdSeconds) {
+            if (canSendNotification(mac)) {
+                logToTerminal("✅ [Native] VALID DETECTION: $locationName")
+                
+                storeDetection(mac, locationName, avgRssi)
+                callGatewayAndTrigger(mac, avgRssi.toInt())
+                //showBeaconDetectedNotification(mac, locationName, avgRssi)
+                prefs.edit().putLong("last_notif_$mac", now).apply()
+                
+                sendEventToFlutter(mapOf(
+                    "event" to "beaconDetected",
+                    "macAddress" to mac,
+                    "locationName" to locationName,
+                    "avgRssi" to avgRssi.toInt(),
+                    "isBackground" to !isInForeground,
+                    "timestamp" to now
+                ))
+            }
+            
+            detectionStartTimes.remove(mac)
+            rssiBuffers[mac]?.clear()
+        }
+    }
+    
+    private fun processWeakSignal(mac: String, locationName: String) {
+        if (detectionStartTimes.containsKey(mac)) {
+            logToTerminal("❌ [Native] Timer RESET for $locationName (weak signal)")
+            detectionStartTimes.remove(mac)
+            rssiBuffers[mac]?.clear()
+        }
+    }
+    
+    private fun canSendNotification(mac: String): Boolean {
+        val lastNotif = prefs.getLong("last_notif_$mac", 0)
+        val now = System.currentTimeMillis()
+        
+        if (lastNotif > 0 && (now - lastNotif) < NOTIFICATION_COOLDOWN_MS) {
+            val waitTime = NOTIFICATION_COOLDOWN_MS - (now - lastNotif)
+            val waitSeconds = waitTime / 1000
+            logToTerminal("⛔ [Native] Cooldown: Wait ${waitSeconds}s")
+            return false
+        }
+        
+        return true
+    }
+    
+    private fun checkLostBeacons(now: Long) {
+        for ((mac, lastSeen) in beaconLastSeen.toMap()) {
+            if (now - lastSeen > 15000L) {
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.cancel(EXTERNAL_TRIGGER_NOTI_ID)
+                beaconLastSeen.remove(mac)
+                detectionStartTimes.remove(mac)
+                rssiBuffers.remove(mac)
+            }
+        }
+    }
+
+    // ============================================================
+    // 💾 DATA STORAGE
+    // ============================================================
+    
+    private fun storeDetection(mac: String, name: String, avgRssi: Double) {
+        val detection = mapOf(
+            "macAddress" to mac,
+            "locationName" to name,
+            "rssi" to avgRssi.toInt(),
+            "timestamp" to System.currentTimeMillis(),
+            "wasInBackground" to !isInForeground
+        )
+        
+        collectedDetections.add(detection)
+        if (collectedDetections.size > 100) {
+            collectedDetections.removeAt(0)
+        }
+    }
+    
+    fun getCollectedDetections(): List<Map<String, Any>> = collectedDetections.toList()
+    
+    fun clearCollectedDetections() {
+        collectedDetections.clear()
+    }
+
+    // ============================================================
+    // Call Gateway and Notify External App
+    // ============================================================
+
+    private fun callGatewayAndTrigger(mac: String, rssi: Int) {
+
+        val cleanUrl = gatewayUrl.trim()
+        if (cleanUrl.isBlank() || !cleanUrl.startsWith("http")) {
+            logToTerminal("❌ [Gateway] Aborted: URL is invalid '$cleanUrl'")
+            return
+        }
+
+        thread {
+            try {
+                val conn = URL(cleanUrl).openConnection() as HttpURLConnection
+
+                val body = JSONObject().apply {
+                    put("user_id", currentUserId.toString())
+                    put("phone_id", Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID))
+                    put("beacon_mac", mac)
+                    put("rssi", rssi)
+                    put("is_initial", true)
+                    put(
+                        "timestamp",
+                        java.time.ZonedDateTime
+                            .now(java.time.ZoneId.of("Asia/Kuala_Lumpur"))
+                            .format(
+                                java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+                            )
+                    )
+                }
+
+                val jsonString = body.toString()
+                val bytes = jsonString.toByteArray(Charsets.UTF_8)
+
+                logToTerminal("📤 [Gateway][REQUEST] $jsonString")
+
+                conn.apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Content-Length", bytes.size.toString())
+                    setRequestProperty("Authorization", "Bearer $gatewayToken")
+                    doOutput = true
+                    doInput = true
+                    useCaches = false
+                    connectTimeout = 10000
+                    readTimeout = 10000
+                }
+
+                conn.outputStream.use { it.write(bytes) }
+
+                val statusCode = conn.responseCode
+
+                val responseText = try {
+                    if (statusCode in 200..299) {
+                        conn.inputStream.bufferedReader().use { it.readText() }
+                    } else {
+                        conn.errorStream?.bufferedReader()?.use { it.readText() }
+                    }
+                } catch (e: Exception) {
+                    null
+                }
+
+                if (statusCode == 200) {
+                    logToTerminal("✅ [Gateway] 200 OK for $mac")
+
+                    val resJson = JSONObject(responseText ?: "{}")
+                    if (resJson.optBoolean("trigger_noti", false)) {
+                        fireExternalTrigger(
+                            mac,
+                            resJson.getString("target_app"),
+                            resJson.getJSONObject("params")
+                        )
+                    }
+
+                } else {
+                    val msg = try {
+                        responseText?.let {
+                            JSONObject(it).optString("message", it)
+                        } ?: "No response body"
+                    } catch (e: Exception) {
+                        responseText ?: "Unknown error"
+                    }
+
+                    logToTerminal("⚠️ [Gateway][$statusCode] $msg")
+                } // ✅ MISSING BRACE WAS HERE
+
+            } catch (e: Exception) {
+                logToTerminal("❌ [Gateway] Connection Error: ${e.message}")
+            }
+        }
+    }
+
+
+    private fun fireExternalTrigger(mac: String, targetApp: String, params: JSONObject) {
+        try {
+            val uriBuilder = Uri.parse(targetApp).buildUpon()
+            params.keys().forEach { uriBuilder.appendQueryParameter(it, params.get(it).toString()) }
+            
+            val intent = Intent(Intent.ACTION_VIEW, uriBuilder.build()).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pi = PendingIntent.getActivity(this, mac.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            
+            val builder = NotificationCompat.Builder(this, ALERT_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("📍 Nearby: ${params.optString("loc")}")
+                .setContentText("Tap to check-in for ${params.optString("shift")} shift")
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setContentIntent(pi).setAutoCancel(true)
+
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(EXTERNAL_TRIGGER_NOTI_ID, builder.build())
+        } catch (e: Exception) { logToTerminal("❌ Trigger UI Error: ${e.message}") }
+    }
+
+    // ============================================================
+    // 🔔 NOTIFICATION (with limit management)
+    // ============================================================
+    
+    private fun showBeaconDetectedNotification(mac: String, locationName: String, avgRssi: Double) {
+        logToTerminal("🔔 [Native] Creating notification for: $locationName")
+        
+        // Check if notifications are enabled
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!NotificationManagerCompat.from(this).areNotificationsEnabled()) {
+                logToTerminal("⚠️ [Native] Notifications are DISABLED by user!")
+                return
+            }
+        }
+        
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        
+        // Check if channel exists and is not blocked
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = notificationManager.getNotificationChannel(ALERT_CHANNEL)
+            if (channel == null) {
+                logToTerminal("⚠️ [Native] Alert channel is NULL! Recreating...")
+                createNotificationChannels()
+            } else if (channel.importance == NotificationManager.IMPORTANCE_NONE) {
+                logToTerminal("⚠️ [Native] Alert channel is BLOCKED by user!")
+            } else {
+                logToTerminal("✅ [Native] Alert channel OK (importance: ${channel.importance})")
+            }
+        }
+        
+        // Enforce notification limit
+        enforceNotificationLimit(notificationManager)
+        
+        val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        
+        val count = notificationCounts.getOrPut(mac) { 0 } + 1
+        notificationCounts[mac] = count
+        
+        val stateStr = if (isInForeground) "FG" else "BG"
+        
+        // Create intent for when notification is tapped
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("action", "beacon_detected")
+            putExtra("mac_address", mac)
+            putExtra("location_name", locationName)
+            putExtra("rssi", avgRssi.toInt())
+            putExtra("timestamp", System.currentTimeMillis())
+        }
+        
+        val pendingIntent = PendingIntent.getActivity(
+            this, 
+            mac.hashCode(), 
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        // Create full-screen intent for heads-up notification
+        val fullScreenIntent = PendingIntent.getActivity(
+            this,
+            mac.hashCode() + 1,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+        
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("📍 Beacon Detected: $locationName")
+            .setContentText("Signal: ${avgRssi.toInt()} dBm | $timestamp")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("Location: $locationName\nSignal: ${avgRssi.toInt()} dBm\nTime: $timestamp\nMode: ${if (isInForeground) "Foreground" else "Background"}\n\nTap to open app."))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setSound(soundUri)
+            .setVibrate(longArrayOf(0, 500, 200, 500))
+            .setLights(android.graphics.Color.BLUE, 1000, 1000)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setFullScreenIntent(fullScreenIntent, true)
+            .setTicker("Beacon detected: $locationName")
+            .setWhen(System.currentTimeMillis())
+            .setShowWhen(true)
+            .setOnlyAlertOnce(false)
+            .build()
+        
+        // Generate unique notification ID
+        val notificationId = (System.currentTimeMillis() % 100000).toInt()
+        
+        try {
+            notificationManager.notify(notificationId, notification)
+            
+            // Track this notification ID for limit management
+            activeNotificationIds.add(notificationId)
+            
+            logToTerminal("🔔 [Native] NOTIFICATION SENT: $locationName (#$count) ID:$notificationId [$stateStr] [${activeNotificationIds.size}/$MAX_BEACON_NOTIFICATIONS]")
+        } catch (e: Exception) {
+            logToTerminal("❌ [Native] Failed to send notification: ${e.message}")
+        }
+    }
+    
+    /**
+     * Enforce notification limit to avoid Android's 50 notification limit
+     * References:
+     * - Android source: MAX_PACKAGE_NOTIFICATIONS = 50
+     * - https://medium.com/mindorks/the-notification-limit-per-app-in-android-94af69a6862c
+     */
+    private fun enforceNotificationLimit(notificationManager: NotificationManager) {
+        // Clean up tracking list by removing dismissed notifications
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val activeSystemNotifications = notificationManager.activeNotifications
+            val activeSystemIds = activeSystemNotifications.map { it.id }.toSet()
+            
+            val removedCount = activeNotificationIds.size
+            activeNotificationIds.retainAll { it in activeSystemIds }
+            
+            val actualRemoved = removedCount - activeNotificationIds.size
+            if (actualRemoved > 0) {
+                logToTerminal("🧹 [Native] Cleaned up $actualRemoved dismissed notification(s)")
+            }
+        }
+        
+        // Remove oldest if at limit
+        while (activeNotificationIds.size >= MAX_BEACON_NOTIFICATIONS) {
+            val oldestId = activeNotificationIds.removeAt(0)
+            notificationManager.cancel(oldestId)
+            logToTerminal("🗑️ [Native] Removed oldest notification (ID:$oldestId) [${activeNotificationIds.size}/$MAX_BEACON_NOTIFICATIONS]")
+        }
+    }
+    
+    /**
+     * Clear all beacon detection notifications (not foreground service)
+     */
+    fun clearAllBeaconNotifications() {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        
+        for (id in activeNotificationIds) {
+            notificationManager.cancel(id)
+        }
+        
+        val count = activeNotificationIds.size
+        activeNotificationIds.clear()
+        
+        logToTerminal("🗑️ [Native] Cleared $count beacon notification(s)")
+    }
+    
+    /**
+     * Get current notification count
+     */
+    fun getActiveNotificationCount(): Int = activeNotificationIds.size
+
+    // ============================================================
+    // 📡 FLUTTER COMMUNICATION
+    // ============================================================
+    
+    fun setEventSink(sink: EventChannel.EventSink?) {
+        eventSink = sink
+        if (sink != null) {
+            logToTerminal("📡 [Native] Flutter connected")
+        }
+    }
+    
+    private fun sendEventToFlutter(data: Map<String, Any?>) {
+        mainHandler.post {
+            try {
+                eventSink?.success(data)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error sending to Flutter: ${e.message}")
+            }
+        }
+    }
+    
+    private fun logToTerminal(message: String) {
+        Log.d(TAG, message)
+        sendEventToFlutter(mapOf(
+            "event" to "log",
+            "message" to message,
+            "timestamp" to System.currentTimeMillis()
+        ))
+    }
+
+    // ============================================================
+    // 📊 STATUS
+    // ============================================================
+    
+    fun isMonitoring(): Boolean = isCurrentlyMonitoring
+    fun getTargetCount(): Int = targetBeacons.size
+    fun isAppInForeground(): Boolean = isInForeground
+    fun isWakeLockActive(): Boolean = isWakeLockAcquired
+    fun getServiceRestartCount(): Int = serviceRestartCount
+    
+    fun getStatus(): Map<String, Any> {
+        return mapOf(
+            "isMonitoring" to isCurrentlyMonitoring,
+            "targetCount" to targetBeacons.size,
+            "detectionCount" to collectedDetections.size,
+            "scanInterval" to BETWEEN_SCAN_PERIOD,
+            "cooldown" to NOTIFICATION_COOLDOWN_MS,
+            "notificationLimit" to MAX_BEACON_NOTIFICATIONS,
+            "activeNotifications" to activeNotificationIds.size,
+            "isInForeground" to isInForeground,
+            "autoRestartEnabled" to (regionBootstrap != null),
+            "wakeLockActive" to isWakeLockAcquired,
+            "batteryOptimizationDisabled" to isBatteryOptimizationDisabled(),
+            "watchdogActive" to isWatchdogRunning,
+            "serviceRestartCount" to serviceRestartCount,
+            "haveDetectedSinceBoot" to haveDetectedBeaconsSinceBoot
+        )
+    }
+    
+    /**
+     * Reset restart counter (for debugging)
+     */
+    fun resetRestartCount() {
+        serviceRestartCount = 0
+        prefs.edit().putInt(PREF_SERVICE_RESTART_COUNT, 0).apply()
+        logToTerminal("🔄 [Native] Restart count reset to 0")
+    }
+}

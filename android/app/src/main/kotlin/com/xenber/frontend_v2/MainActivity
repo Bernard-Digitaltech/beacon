@@ -1,0 +1,90 @@
+package com.xenber.frontend_v2
+
+import android.content.Intent
+import android.os.Bundle
+import android.util.Log
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+
+class MainActivity : FlutterActivity() {
+    
+    companion object {
+        private const val TAG = "MainActivity"
+        private const val NAVIGATION_CHANNEL = "com.xenber.frontend_v2/navigation"
+    }
+    
+    private var navigationChannel: MethodChannel? = null
+    private var pendingNavigationData: Map<String, Any?>? = null
+    
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        
+        Log.d(TAG, "🔧 Configuring Flutter engine")
+        
+        // Register beacon bridge plugin
+        flutterEngine.plugins.add(BeaconBridgePlugin())
+        
+        // Create navigation channel for handling notification taps
+        navigationChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NAVIGATION_CHANNEL)
+        
+        // If there's pending navigation data, send it now
+        pendingNavigationData?.let { data ->
+            Log.d(TAG, "📤 Sending pending navigation data to Flutter")
+            navigationChannel?.invokeMethod("onNotificationTap", data)
+            pendingNavigationData = null
+        }
+        
+        Log.d(TAG, "✅ Flutter engine configured")
+    }
+    
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Log.d(TAG, "🚀 MainActivity onCreate")
+        handleIntent(intent)
+    }
+    
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        Log.d(TAG, "📥 onNewIntent received")
+        setIntent(intent)
+        handleIntent(intent)
+    }
+    
+    private fun handleIntent(intent: Intent?) {
+        if (intent == null) return
+        
+        val action = intent.getStringExtra("action")
+        Log.d(TAG, "📋 Intent action: $action")
+        
+        if (action == "beacon_detected") {
+            val macAddress = intent.getStringExtra("mac_address") ?: ""
+            val locationName = intent.getStringExtra("location_name") ?: ""
+            val rssi = intent.getIntExtra("rssi", 0)
+            val timestamp = intent.getLongExtra("timestamp", 0)
+            
+            Log.d(TAG, "🎯 Beacon detection from notification:")
+            Log.d(TAG, "   MAC: $macAddress")
+            Log.d(TAG, "   Location: $locationName")
+            Log.d(TAG, "   RSSI: $rssi dBm")
+            
+            val navigationData = mapOf(
+                "action" to "beacon_detected",
+                "macAddress" to macAddress,
+                "locationName" to locationName,
+                "rssi" to rssi,
+                "timestamp" to timestamp
+            )
+            
+            // Try to send to Flutter immediately
+            if (navigationChannel != null) {
+                Log.d(TAG, "📤 Sending navigation data to Flutter")
+                navigationChannel?.invokeMethod("onNotificationTap", navigationData)
+            } else {
+                // Flutter engine not ready yet, store for later
+                Log.d(TAG, "⏳ Flutter not ready, storing navigation data")
+                pendingNavigationData = navigationData
+            }
+        }
+    }
+}

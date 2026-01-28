@@ -1,0 +1,358 @@
+package com.xenber.frontend_v2
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import android.util.Log
+import androidx.annotation.NonNull
+import io.flutter.embedding.engine.plugins.FlutterPlugin
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodCall
+import io.flutter.plugin.common.MethodChannel
+
+/**
+ * BeaconBridgePlugin - Flutter ↔ Native Bridge
+ * 
+ * This plugin exposes native beacon functionality to Flutter via Platform Channels.
+ * 
+ * Methods Available:
+ * - initialize: Initialize the native service
+ * - addTargetBeacon: Add a beacon to monitor
+ * - clearTargetBeacons: Remove all target beacons
+ * - startMonitoring: Start scanning for beacons
+ * - stopMonitoring: Stop scanning
+ * - isMonitoring: Check if currently monitoring
+ * - getCollectedDetections: Get stored detection history
+ * - clearCollectedDetections: Clear detection history
+ * - getBatteryOptimizationStatus: Check if battery optimization is disabled
+ * - requestBatteryOptimizationExemption: Request user to disable battery optimization
+ * - openBatterySettings: Open battery optimization settings screen
+ * - getStatus: Get comprehensive status of the service
+ * - getServiceRestartCount: Get number of times service was restarted
+ * - resetRestartCount: Reset the restart counter (for debugging)
+ * - clearAllNotifications: Clear all beacon detection notifications
+ * - getActiveNotificationCount: Get number of active notifications
+ * - ping: Test connectivity
+ * 
+ * References:
+ * - Battery Optimization: https://developer.android.com/training/monitoring-device-state/doze-standby
+ * - Samsung specific: https://dontkillmyapp.com/samsung
+ * - Foreground Service: https://altbeacon.github.io/android-beacon-library/foreground-service.html
+ */
+class BeaconBridgePlugin : FlutterPlugin, MethodChannel.MethodCallHandler, 
+    EventChannel.StreamHandler {
+
+    companion object {
+        private const val TAG = "BeaconBridge"
+        private const val METHOD_CHANNEL = "com.xenber.frontend_v2/beacon_bridge"
+        private const val EVENT_CHANNEL = "com.xenber.frontend_v2/beacon_events"
+    }
+
+    private lateinit var methodChannel: MethodChannel
+    private lateinit var eventChannel: EventChannel
+    private lateinit var context: Context
+
+    // ============================================================
+    // FLUTTER PLUGIN LIFECYCLE
+    // ============================================================
+
+    override fun onAttachedToEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        Log.d(TAG, "🔌 BeaconBridgePlugin attaching to Flutter engine")
+        
+        context = binding.applicationContext
+
+        methodChannel = MethodChannel(binding.binaryMessenger, METHOD_CHANNEL)
+        methodChannel.setMethodCallHandler(this)
+
+        eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL)
+        eventChannel.setStreamHandler(this)
+
+        Log.d(TAG, "✅ Platform Channels registered")
+        Log.d(TAG, "   Method: $METHOD_CHANNEL")
+        Log.d(TAG, "   Event: $EVENT_CHANNEL")
+    }
+
+    override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
+        Log.d(TAG, "🔌 BeaconBridgePlugin detaching")
+        methodChannel.setMethodCallHandler(null)
+        eventChannel.setStreamHandler(null)
+    }
+
+    // ============================================================
+    // METHOD CHANNEL HANDLER
+    // ============================================================
+
+    override fun onMethodCall(@NonNull call: MethodCall, @NonNull result: MethodChannel.Result) {
+        Log.d(TAG, "📥 Method: ${call.method}")
+
+        try {
+            val app = BeaconApplication.instance
+
+            when (call.method) {
+                
+                // ========================================
+                // INITIALIZATION
+                // ========================================
+                "initialize" -> {
+                    Log.d(TAG, "🚀 Initialize called from Flutter")
+                    result.success(mapOf(
+                        "success" to true,
+                        "message" to "Native beacon service initialized",
+                        "platform" to "Android",
+                        "sdkVersion" to Build.VERSION.SDK_INT,
+                        "batteryOptimizationDisabled" to app.isBatteryOptimizationDisabled(),
+                        "serviceRestartCount" to app.getServiceRestartCount()
+                    ))
+                }
+
+                // ========================================
+                // TARGET BEACON MANAGEMENT
+                // ========================================
+                "addTargetBeacon" -> {
+                    val mac = call.argument<String>("macAddress")
+                    val name = call.argument<String>("locationName")
+                    
+                    if (mac != null && name != null) {
+                        app.addTargetBeacon(mac, name)
+                        result.success(mapOf(
+                            "success" to true,
+                            "macAddress" to mac,
+                            "locationName" to name
+                        ))
+                    } else {
+                        result.error("INVALID_ARGS", "macAddress and locationName required", null)
+                    }
+                }
+                
+                "clearTargetBeacons" -> {
+                    app.clearTargetBeacons()
+                    result.success(mapOf("success" to true, "message" to "All targets cleared"))
+                }
+
+                // ========================================
+                // MONITORING CONTROL
+                // ========================================
+                "startMonitoring" -> {
+                    val config = call.arguments as? Map<String, Any>
+                    if (config != null) {
+                        result.success(mapOf(
+                            "success" to true,
+                            "message" to "Monitoring started",
+                            "targetCount" to app.getTargetCount(),
+                            "batteryOptimizationDisabled" to app.isBatteryOptimizationDisabled()
+                        ))
+                    } else {
+                        result.error("INVALID_ARGS", "Configuration map missing", null)
+                    }
+                }
+
+                "stopMonitoring" -> {
+                    app.stopMonitoring()
+                    result.success(mapOf(
+                        "success" to true,
+                        "message" to "Monitoring stopped"
+                    ))
+                }
+                
+                "isMonitoring" -> {
+                    result.success(app.isMonitoring())
+                }
+
+                // ========================================
+                // DATA RETRIEVAL
+                // ========================================
+                "getCollectedDetections" -> {
+                    val detections = app.getCollectedDetections()
+                    result.success(mapOf(
+                        "success" to true,
+                        "count" to detections.size,
+                        "detections" to detections
+                    ))
+                }
+                
+                "clearCollectedDetections" -> {
+                    app.clearCollectedDetections()
+                    result.success(mapOf("success" to true, "message" to "Detections cleared"))
+                }
+
+                // ========================================
+                // 🔋 BATTERY OPTIMIZATION
+                // Reference: https://developer.android.com/training/monitoring-device-state/doze-standby
+                // Samsung: https://dontkillmyapp.com/samsung
+                // ========================================
+                
+                /**
+                 * Check if battery optimization is disabled for this app.
+                 * 
+                 * Returns: Boolean
+                 * - true = Battery optimization DISABLED (Good! App won't be killed)
+                 * - false = Battery optimization ENABLED (Risk! App may be killed)
+                 * 
+                 * Reference: https://developer.android.com/reference/android/os/PowerManager#isIgnoringBatteryOptimizations(java.lang.String)
+                 */
+                "getBatteryOptimizationStatus" -> {
+                    val isDisabled = app.isBatteryOptimizationDisabled()
+                    result.success(mapOf(
+                        "success" to true,
+                        "isDisabled" to isDisabled,
+                        "isOptimized" to !isDisabled,  // Inverse for clarity
+                        "recommendation" to if (isDisabled) 
+                            "Battery optimization is disabled. Good!" 
+                        else 
+                            "Battery optimization is enabled. App may be killed in background!"
+                    ))
+                }
+
+                /**
+                 * Request user to disable battery optimization.
+                 * This will show a system dialog asking user for permission.
+                 * 
+                 * IMPORTANT: This is REQUIRED for reliable background operation on Samsung devices!
+                 * 
+                 * Reference: https://developer.android.com/training/monitoring-device-state/doze-standby#support_for_other_use_cases
+                 * Quote: "An app can fire the ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS intent 
+                 *         to trigger a system dialog to let the user add the app to the allowlist"
+                 */
+                "requestBatteryOptimizationExemption" -> {
+                    val wasRequested = app.requestBatteryOptimizationExemption()
+                    result.success(mapOf(
+                        "success" to true,
+                        "dialogShown" to wasRequested,
+                        "alreadyDisabled" to !wasRequested,
+                        "message" to if (wasRequested) 
+                            "Battery optimization dialog shown to user" 
+                        else 
+                            "Battery optimization already disabled"
+                    ))
+                }
+                
+                /**
+                 * Open the battery optimization settings screen.
+                 * Use this as a fallback if the direct request doesn't work.
+                 * 
+                 * Reference: https://developer.android.com/reference/android/provider/Settings#ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                 */
+                "openBatterySettings" -> {
+                    app.openBatteryOptimizationSettings()
+                    result.success(mapOf(
+                        "success" to true,
+                        "message" to "Battery optimization settings opened"
+                    ))
+                }
+
+                // ========================================
+                // 🔔 NOTIFICATION MANAGEMENT
+                // ========================================
+                
+                /**
+                 * Clear all beacon detection notifications (not the foreground service notification)
+                 */
+                "clearAllNotifications" -> {
+                    app.clearAllBeaconNotifications()
+                    result.success(mapOf(
+                        "success" to true,
+                        "message" to "All beacon notifications cleared"
+                    ))
+                }
+                
+                /**
+                 * Get number of active beacon detection notifications
+                 */
+                "getActiveNotificationCount" -> {
+                    val count = app.getActiveNotificationCount()
+                    result.success(mapOf(
+                        "success" to true,
+                        "count" to count
+                    ))
+                }
+
+                // ========================================
+                // 🔄 SERVICE RESTART TRACKING
+                // ========================================
+                
+                /**
+                 * Get number of times the service was restarted.
+                 * Useful for debugging if service keeps getting killed.
+                 */
+                "getServiceRestartCount" -> {
+                    result.success(mapOf(
+                        "success" to true,
+                        "count" to app.getServiceRestartCount()
+                    ))
+                }
+                
+                /**
+                 * Reset the service restart counter (for debugging)
+                 */
+                "resetRestartCount" -> {
+                    app.resetRestartCount()
+                    result.success(mapOf(
+                        "success" to true,
+                        "message" to "Restart count reset to 0"
+                    ))
+                }
+
+                // ========================================
+                // 📊 STATUS & DEBUG
+                // ========================================
+                
+                /**
+                 * Get comprehensive status of the beacon service.
+                 * Includes all monitoring, battery, notification, and watchdog status.
+                 */
+                "getStatus" -> {
+                    val status = app.getStatus().toMutableMap()
+                    
+                    // Add additional context
+                    status["androidVersion"] = Build.VERSION.SDK_INT
+                    status["androidVersionName"] = Build.VERSION.RELEASE
+                    status["manufacturer"] = Build.MANUFACTURER
+                    status["model"] = Build.MODEL
+                    status["isSamsung"] = Build.MANUFACTURER.equals("samsung", ignoreCase = true)
+                    
+                    result.success(status)
+                }
+                
+                /**
+                 * Simple ping to test if native bridge is working
+                 */
+                "ping" -> {
+                    result.success(mapOf(
+                        "success" to true,
+                        "message" to "pong",
+                        "timestamp" to System.currentTimeMillis(),
+                        "nativeVersion" to "2.0.0-survival"
+                    ))
+                }
+
+                // ========================================
+                // UNKNOWN METHOD
+                // ========================================
+                else -> {
+                    Log.w(TAG, "⚠️ Unknown method: ${call.method}")
+                    result.notImplemented()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in ${call.method}: ${e.message}")
+            result.error("ERROR", e.message, e.stackTraceToString())
+        }
+    }
+
+    // ============================================================
+    // EVENT CHANNEL HANDLER
+    // ============================================================
+
+    override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+        Log.d(TAG, "📡 Flutter started listening to events")
+        BeaconApplication.instance.setEventSink(events)
+    }
+
+    override fun onCancel(arguments: Any?) {
+        Log.d(TAG, "📡 Flutter stopped listening to events")
+        BeaconApplication.instance.setEventSink(null)
+    }
+}
