@@ -16,6 +16,14 @@ class Logger {
     }
   }
 
+  static func w(_ message: String) {
+    print("[WARN] \(message)")
+    
+    if #available(iOS 14.0, *) {
+      osLog.info("[WARN] \(message, privacy: .public)")
+    }
+  }
+
   static func e(_ message: String, _ error: Error? = nil) {
     var logMessage = "[ERROR] \(message)"
     

@@ -188,8 +188,8 @@ class NativeBeaconService {
 
       final Map<String, dynamic> config = {
         "userId": userId,
-        "gatewayUrl": dotenv.get('BEACON_GATEWAY_URL', fallback: 'http://192.168.68.61:8000/api/v1/detection/report'),
-        "dataUrl": dotenv.get('BEACON_DATA_URL', fallback: 'http://192.168.68.61:8000/api/v1/beacons'),
+        "gatewayUrl": dotenv.get('BEACON_GATEWAY_URL', fallback: 'http://192.168.41.1:8000/api/v1/detection/report'),
+        "dataUrl": dotenv.get('BEACON_DATA_URL', fallback: 'http://192.168.41.1:8000/api/v1/beacons'),
         "rssiThreshold": int.parse(dotenv.get('BEACON_RSSI_THRESHOLD', fallback: '-85')),
         "timeThreshold": int.parse(dotenv.get('BEACON_TIME_THRESHOLD', fallback: '2')),
       };
@@ -245,7 +245,7 @@ class NativeBeaconService {
 
   Future<void> fetchAndSetBestShift() async {
     try {
-      final response = await http.get(Uri.parse("http://192.168.0.135:8000/api/v1/shifts"));
+      final response = await http.get(Uri.parse(dotenv.get('SHIFT_TIME_URL', fallback: 'http://192.168.41.1:8000/api/v1/shifts')));
       if (response.statusCode == 200) {
         final List<dynamic> shifts = json.decode(response.body)['data'];
         
