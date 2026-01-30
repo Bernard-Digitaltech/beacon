@@ -56,10 +56,22 @@ class GatewayClient {
           var beaconMap: [String: String] = [:]
           
           for item in dataArray {
-            if let mac = item["beacon_uuid"] as? String,
-              let name = item["location_name"] as? String {
-              beaconMap[mac.uppercased()] = name
-            }
+            if let uuid = item["beacon_uuid"] as? String,
+               let name = item["location_name"] as? String {
+                let major = item["beacon_major"] as? Int
+                let minor = item["beacon_minor"] as? Int
+
+                var key = uuid.uppercased()
+
+                if let maj = major, let min = minor {
+                  key = "\(uuid.uppercased()):\(maj):\(min)"
+                  Logger.d("📡 Mapped: \(key) -> \(name)")
+                } else {
+                  Logger.d("📡 Mapped: \(key) (Region Only) -> \(name)")
+                }
+
+                beaconMap[key] = name
+              }
           }
             
           Logger.i("Fetched \(beaconMap.count) beacons from server")
@@ -78,10 +90,21 @@ class GatewayClient {
   func sendDetection(mac: String, rssi: Int, timestamp: Int, battery: Int? = nil, isInitial: Bool = true, completion: @escaping JSONCallback) {
       guard let config = config else { return }
       
+      let components = mac.components(separatedBy: ":")
+      let uuid = components[0]
+      let major = components.count > 1 ? Int(components[1]) : nil
+      let minor = components.count > 2 ? Int(components[2]) : nil
+
       let body: [String: Any] = [
         "type": "beacon_detection",
         "user_id": config.userId,
         "phone_id": getDeviceId(),
+
+        // Send separated fields 
+        "beacon_uuid": uuid,
+        "major": major ?? NSNull(),
+        "minor": minor ?? NSNull(),
+
         "beacon_mac": mac,
         "rssi": rssi,
         "battery": battery ?? NSNull(), 

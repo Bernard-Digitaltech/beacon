@@ -47,12 +47,16 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     getTargetFromServer()
   }
 
-  func addTarget(mac: String, name: String) {
-    let normalizedMAC = mac.uppercased()
-    targetBeacons[normalizedMAC] = name
+  func addTarget(uuid: String, major: Int?, minor: Int?, name: String) {
+    let key = getBeaconKey(uuid: uuid, major: major, minor: minor)
+    targetBeacons[key] = name
+
+    if targetBeacons[uuid.uppercased()] == nil {
+        targetBeacons[uuid.uppercased()] = "Generic Region"
+    }
 
     prefs.saveTargets(targetBeacons)
-    Logger.i("Target added: \(normalizedMAC) (\(name))")
+    Logger.i("Target added: \(key) (\(name))")
   }
 
   func clearTargets() {
@@ -87,10 +91,15 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
 
     Logger.i("Starting iOS monitoring...")
 
-    monitoredRegions = targetBeacons.compactMap{(uuidStr, name) -> CLBeaconRegion? in 
+    // 1. Group targets by UUID 
+    let uniqueUUIDs = Set(targetBeacons.keys.map { key -> String in
+        return key.components(separatedBy: ":")[0] 
+    })
+    // 2. Create ONE region per UUID
+    monitoredRegions = uniqueUUIDs.compactMap{(uuidStr, name) -> CLBeaconRegion? in 
       guard let uuid = UUID(uuidString: uuidStr) else {return nil}
       let constraint = CLBeaconIdentityConstraint(uuid: uuid)
-      let region = CLBeaconRegion(beaconIdentityConstraint: constraint, identifier: name)
+      let region = CLBeaconRegion(beaconIdentityConstraint: constraint, identifier: uuidStr)
       region.notifyOnEntry = true
       region.notifyOnExit = true
       region.notifyEntryStateOnDisplay = true
@@ -100,6 +109,7 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     for region in monitoredRegions {
       locationManager?.startMonitoring(for: region)
       locationManager?.startRangingBeacons(satisfying: region.beaconIdentityConstraint)
+      locationManager?.requestState(for: region)
     }
 
     isMonitoring = true
@@ -194,12 +204,17 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     if beacons.isEmpty {return}
 
     for beacon in beacons {
-      let mac = beacon.uuid.uuidString
-      let name = targetBeacons[mac] ?? "Unknown"
+      let uuid = beacon.uuid.uuidString.uppercased()
+      let major = beacon.major.intValue
+      let minor = beacon.minor.intValue
       let rssi = beacon.rssi
 
+      let specificKey = getBeaconKey(uuid: uuid, major: major, minor: minor)
+
+      let name = targetBeacons[specificKey] ?? targetBeacons[uuid] ?? "Unknown Beacon"
+
       detectionEngine.processBeacon(
-        mac: mac, 
+        mac: specificKey, 
         locationName: name, 
         rssi: rssi, 
         isBackground: !lifecycle.isForeground,
@@ -207,6 +222,58 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       )
     }
   }
+
+  //--- CLLocationManagerDelegate Debugging ---//
+  func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+    Logger.e("❌ Location Manager Failed: \(error.localizedDescription)")
+  }
+
+  func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
+    Logger.e("❌ Monitoring Failed for region \(region?.identifier ?? "unknown"): \(error.localizedDescription)")
+  }
+
+  func locationManager(_ manager: CLLocationManager, rangingBeaconsDidFailFor region: CLBeaconRegion, withError error: Error) {
+    Logger.e("❌ Ranging Failed for region \(region.identifier): \(error.localizedDescription)")
+    
+    let nsError = error as NSError
+    if nsError.domain == kCLErrorDomain && nsError.code == 104 {
+        Logger.e("⚠️ Error 104: Ranging Unavailable. (Bluetooth might be OFF or 'Precise Location' is disabled)")
+    }
+  }
+
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    
+    let status: CLAuthorizationStatus
+    if #available(iOS 14.0, *) {
+      status = manager.authorizationStatus
+    } else {
+      status = CLLocationManager.authorizationStatus()
+    }
+
+    switch status {
+    case .authorizedAlways:
+        Logger.i("✅ Permission: ALWAYS")
+    case .authorizedWhenInUse:
+        Logger.i("⚠️ Permission: WHEN IN USE (Background detection might fail)")
+    case .denied, .restricted:
+        Logger.e("❌ Permission: DENIED/RESTRICTED")
+    case .notDetermined:
+        Logger.i("❓ Permission: NOT DETERMINED")
+    default:
+        Logger.i("Permission Status: \(status.rawValue)")
+    }
+
+    if #available(iOS 14.0, *) {
+        switch manager.accuracyAuthorization {
+        case .fullAccuracy:
+            Logger.i("✅ Precise Location: ON")
+        case .reducedAccuracy:
+            Logger.e("❌ Precise Location: OFF (Beacons are blocked by iOS!)")
+        @unknown default:
+            break
+        }
+    }
+    {}
 
   func onBeaconRanged (mac: String, locationName: String, rssi: Int, avgRssi: Int, timestamp: Int64, isBackground: Bool, battery: Int?) {
     sendEvent("beaconRanged", data:[
@@ -225,6 +292,14 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
 
   func onBeaconLost(mac: String) {
     sendEvent("beaconLost", data: ["mac": mac])
+  }
+
+  private func getBeaconKey(uuid: String, major:Int?, minor: Int?) -> String {
+    let u = uuid.uppercased()
+    if let maj = major, let min = minor {
+      return "\(u):\(maj):\(min)"
+    }
+    return u
   }
 
   private func processDetection(mac: String, name: String, rssi: Int) {

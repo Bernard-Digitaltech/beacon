@@ -62,8 +62,8 @@ class PreferenceStore {
   }
 
   func saveTargets(_ targets: [String: String]) {
-    let jsonArray = targets.map { (mac, name) -> [String: String] in
-      return ["mac": mac, "name": name]
+    let jsonArray = targets.map { (key, name) -> [String: String] in
+      return ["mac": key, "name": name]
     }
     
     if let jsonData = try? JSONSerialization.data(withJSONObject: jsonArray, options: []),
@@ -83,8 +83,8 @@ class PreferenceStore {
       do {
         if let jsonArray = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: String]] {
         for obj in jsonArray {
-          if let mac = obj["mac"], let name = obj["name"] {
-              targets[mac] = name
+          if let macKey = obj["mac"], let name = obj["name"] {
+              targets[macKey] = name
             }
           }
         }
