@@ -195,8 +195,12 @@ class _BeaconScannerPageState extends State<BeaconScannerPage>
       AppLogger().addLog("✅ [UI] Native bridge initialized");
 
       try {
-        await service.fetchAndSetBestShift();
-        AppLogger().addLog("✅ [UI] Best shift fetched and set");
+        final res = await service.fetchAndSetBestShift();
+        if (res) {
+          AppLogger().addLog("✅ [UI] Best shift fetched and set");
+        } else {
+          AppLogger().addLog("⚠️ [UI] Best shift fetch failed");
+        }
       } catch (e) {
         AppLogger().addLog("⚠️ [UI] Shift fetch error: $e");
       }
@@ -419,9 +423,9 @@ class _BeaconScannerPageState extends State<BeaconScannerPage>
     _regionSubscription = service.regionStream.listen((data) {
       final event = data['event'];
       if (event == 'regionEnter') {
-        _showSnackBar('🟢 Entered region', Colors.green);
+        AppLogger().addLog('🟢 Entered region');
       } else if (event == 'regionExit') {
-        _showSnackBar('🔴 Exited region', Colors.orange);
+        AppLogger().addLog('🔴 Exited region');
       }
     });
 
@@ -433,7 +437,7 @@ class _BeaconScannerPageState extends State<BeaconScannerPage>
       }
       if (event == 'beaconDetected') {
         final locationName = data['locationName'] ?? 'Unknown';
-        _showSnackBar('🎯 Beacon detected: $locationName', Colors.blue);
+        AppLogger().addLog('🎯 Beacon detected: $locationName');
       } else if (event == 'notificationTap') {
         _handleNotificationTap(data);
       }
@@ -531,16 +535,17 @@ class _BeaconScannerPageState extends State<BeaconScannerPage>
     final bool isValid = await NativeBeaconService.instance.isDetectionValid(
       data['timestamp'],
     );
-
-    if (isValid) {
-      //_showDetectionDetailsDialog(data);
-      AppLogger().addLog("🟢 [UI] Detection within valid shift hours.");
-      _showSnackBar('✅ Detection confirmed within shift hours', Colors.green);
-    } else {
-      AppLogger().addLog("⚠️ [UI] Detection ignored: Outside shift hours");
-      _showSnackBar('⚠️ Outside your scheduled shift window', Colors.orange);
-    }
   }
+
+  //   if (isValid) {
+  //     //_showDetectionDetailsDialog(data);ß
+  //     AppLogger().addLog("🟢 [UI] Detection within valid shift hours.");
+  //     _showSnackBar('✅ Detection confirmed within shift hours', Colors.green);
+  //   } else {
+  //     AppLogger().addLog("⚠️ [UI] Detection ignored: Outside shift hours");
+  //     _showSnackBar('⚠️ Outside your scheduled shift window', Colors.orange);
+  //   }
+  // }
 
   void _showSnackBar(String message, Color color) {
     if (!mounted) return;

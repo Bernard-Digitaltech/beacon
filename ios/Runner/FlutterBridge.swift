@@ -4,7 +4,7 @@ import UserNotifications
 
 public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUserNotificationCenterDelegate{
   
-  public static let shared = FlutterBridge() 
+  public static let shared = FlutterBridge()
   private var eventSink: FlutterEventSink?
 
   private let METHOD_CHANNEL_NAME = "com.xenber.frontend_v2/beacon_bridge"
@@ -43,14 +43,14 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
       }
 
       let config = BeaconConfig(
-        gatewayUrl: args["gatewayUrl"] as? String ?? "",
+        //gatewayUrl: args["gatewayUrl"] as? String ?? "",
         dataUrl: args["dataUrl"] as? String ?? "",
         userId: args["userId"] as? String ?? "unknown",
         rssiThreshold: args["rssiThreshold"] as? Int ?? -85,
         timeThreshold: args["timeThreshold"] as? Int ?? 2,
         scanPeriod: args["scanPeriod"] as? Int ?? 1100,
         betweenScanPeriod: args["betweenScanPeriod"] as? Int ?? 5000,
-        notificationCooldown: 60000 
+        notificationCooldown: 60000
       )
     
     sdk.configure(config: config)
@@ -63,12 +63,14 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
 
     case "addTargetBeacon":
       guard let args = call.arguments as? [String: Any],
-          let mac = args["macAddress"] as? String,
+          let uuid = args["uuid"] as? String,
+          let major = args["major"] as? Int,
+          let minor = args["minor"] as? Int,
           let name = args["locationName"] as? String else {
-        result(FlutterError(code: "INVALID_ARGS", message: "Mac or Name missing", details: nil))
+        result(FlutterError(code: "INVALID_ARGS", message: "UUID, Major, Minor or Name missing", details: nil))
         return
       }
-      sdk.addTarget(mac: mac, name: name)
+      sdk.addTarget(uuid: uuid, major: major, minor: minor, name: name)
       result(true)
 
     case "isMonitoring":
@@ -114,14 +116,14 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
   public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     self.eventSink = events
 
-    BeaconSDK.shared.setFlutterSink { [weak self] data in
+    BeaconSDK.shared.setEventCallback { [weak self] (data: [String: Any?]) in
       self?.send(data)
     }
     return nil
   }
 
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
-    BeaconSDK.shared.setFlutterSink(nil) 
+    BeaconSDK.shared.setEventCallback(nil)
     self.eventSink = nil
     return nil
   }

@@ -16,12 +16,13 @@ public class BeaconSDK: NSObject {
 
   public static let shared = BeaconSDK()
   private var state: State = .created
+  private var eventSink:(([String: Any?]) -> Void)?
   
   private let prefs = PreferenceStore()
   private let lifecycle = BeaconLifecycle()
   private let watchdog = BeaconWatchdog()
   private let initializer = BeaconInitializer()
-  private let flutterBridge = FlutterBridge.shared
+  //private let flutterBridge = FlutterBridge.shared
   private let sdkTracker = SdkTracker()
 
   private var currentConfig: BeaconConfig?
@@ -31,7 +32,10 @@ public class BeaconSDK: NSObject {
       prefs: prefs,
       lifecycle: lifecycle,
       watchdog: watchdog,
-      flutterBridge: flutterBridge
+      
+      onEvent: {[weak self] data in
+        self?.eventSink?(data)
+      }
     )
   }()
 
@@ -77,10 +81,10 @@ public class BeaconSDK: NSObject {
     }
   }
   
-  public func addTarget(mac: String, name: String) {
+  public func addTarget(uuid: String, major: Int?, minor: Int?, name: String) {
     sdkTracker.step("SDK.addTarget")
     do {
-      monitor.addTarget(mac: mac, name: name)
+      monitor.addTarget(uuid: uuid, major: major, minor: minor, name: name)
     } catch {
       sdkTracker.error(.inputError, "Invalid target input.", error)
     }
@@ -128,7 +132,9 @@ public class BeaconSDK: NSObject {
     )
   }
 
-  public func setFlutterSink(_ sink: (([String: Any?]) -> Void)?) {}
+  public func setEventCallback(_ callback: (([String: Any?]) -> Void)?) {
+    self.eventSink = callback
+  }
 
   public func getStatus() -> [String: Any] {
     return monitor.getStatus()

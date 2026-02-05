@@ -20,7 +20,7 @@ class PreferenceStore {
 
   func saveConfig(_ config: BeaconConfig) {
     let configDict: [String: Any] = [
-      "gatewayUrl": config.gatewayUrl,
+      //"gatewayUrl": config.gatewayUrl,
       "dataUrl": config.dataUrl,
       "userId": config.userId,
       "rssiThreshold": config.rssiThreshold,
@@ -45,7 +45,7 @@ class PreferenceStore {
     do {
       if let json = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [String: Any] {
         return BeaconConfig(
-          gatewayUrl: json["gatewayUrl"] as? String ?? "",
+          //gatewayUrl: json["gatewayUrl"] as? String ?? "",
           dataUrl: json["dataUrl"] as? String ?? "",
           userId: json["userId"] as? String ?? "",
           rssiThreshold: json["rssiThreshold"] as? Int ?? -85,

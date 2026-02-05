@@ -87,103 +87,103 @@ class GatewayClient {
     task.resume()
   }
 
-  func sendDetection(mac: String, rssi: Int, timestamp: Int, battery: Int? = nil, isInitial: Bool = true, completion: @escaping JSONCallback) {
-      guard let config = config else { return }
+  // func sendDetection(mac: String, rssi: Int, timestamp: Int, battery: Int? = nil, isInitial: Bool = true, completion: @escaping JSONCallback) {
+  //     guard let config = config else { return }
       
-      let components = mac.components(separatedBy: ":")
-      let uuid = components[0]
-      let major = components.count > 1 ? Int(components[1]) : nil
-      let minor = components.count > 2 ? Int(components[2]) : nil
+  //     let components = mac.components(separatedBy: ":")
+  //     let uuid = components[0]
+  //     let major = components.count > 1 ? Int(components[1]) : nil
+  //     let minor = components.count > 2 ? Int(components[2]) : nil
 
-      let body: [String: Any] = [
-        "type": "beacon_detection",
-        "user_id": config.userId,
-        "phone_id": getDeviceId(),
+  //     let body: [String: Any] = [
+  //       "type": "beacon_detection",
+  //       "user_id": config.userId,
+  //       "phone_id": getDeviceId(),
 
-        // Send separated fields 
-        "beacon_uuid": uuid,
-        "major": major ?? NSNull(),
-        "minor": minor ?? NSNull(),
+  //       // Send separated fields 
+  //       "beacon_uuid": uuid,
+  //       "major": major ?? NSNull(),
+  //       "minor": minor ?? NSNull(),
 
-        "beacon_mac": mac,
-        "rssi": rssi,
-        "battery": battery ?? NSNull(), 
-        "is_initial": isInitial,
-        "timestamp": getKLTimestamp()  
-      ]
+  //       "beacon_mac": mac,
+  //       "rssi": rssi,
+  //       "battery": battery ?? NSNull(), 
+  //       "is_initial": isInitial,
+  //       "timestamp": getKLTimestamp()  
+  //     ]
       
-      executeRequest(body: body) { result in
-      switch result {
-      case .success(let json):
-        completion(json)
-      case .failure(_):
-        completion([:])
-      }
-    }
-  }
+  //     executeRequest(body: body) { result in
+  //     switch result {
+  //     case .success(let json):
+  //       completion(json)
+  //     case .failure(_):
+  //       completion([:])
+  //     }
+  //   }
+  // }
 
-  func sendEvent(_ eventType: String, data: [String: Any]) {
-    guard let config = config else { return }
+  // func sendEvent(_ eventType: String, data: [String: Any]) {
+  //   guard let config = config else { return }
     
-    let body: [String: Any] = [
-      "type": "gateway_event",
-      "event_type": eventType,
-      "user_id": config.userId,
-      "phone_id": getDeviceId(),
-      "details": data,
-      "timestamp": getKLTimestamp()
-    ]
+  //   let body: [String: Any] = [
+  //     "type": "gateway_event",
+  //     "event_type": eventType,
+  //     "user_id": config.userId,
+  //     "phone_id": getDeviceId(),
+  //     "details": data,
+  //     "timestamp": getKLTimestamp()
+  //   ]
     
-    executeRequest(body: body) { _ in }
-  }
+  //   executeRequest(body: body) { _ in }
+  // }
 
-  private func executeRequest(body: [String: Any], completion: @escaping (Result<[String: Any], Error>) -> Void) {
-    guard let gatewayUrlString = config?.gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines),
-          let url = URL(string: gatewayUrlString),
-          gatewayUrlString.hasPrefix("http") else {
-      completion(.failure(NSError(domain: "Gateway", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
-      return
-    }
+  // private func executeRequest(body: [String: Any], completion: @escaping (Result<[String: Any], Error>) -> Void) {
+  //   guard let gatewayUrlString = config?.gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines),
+  //         let url = URL(string: gatewayUrlString),
+  //         gatewayUrlString.hasPrefix("http") else {
+  //     completion(.failure(NSError(domain: "Gateway", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])))
+  //     return
+  //   }
 
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
+  //   var request = URLRequest(url: url)
+  //   request.httpMethod = "POST"
+  //   request.setValue("application/json; charset=UTF-8", forHTTPHeaderField: "Content-Type")
+  //   request.setValue("application/json", forHTTPHeaderField: "Accept")
     
-    do {
-      request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-      Logger.i("📤 [Gateway] Sending \(body["type"] ?? "unknown"): \(body)")
-    } catch {
-      Logger.e("Failed to serialize JSON")
-      return
-    }
+  //   do {
+  //     request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+  //     Logger.i("📤 [Gateway] Sending \(body["type"] ?? "unknown"): \(body)")
+  //   } catch {
+  //     Logger.e("Failed to serialize JSON")
+  //     return
+  //   }
 
-    let task = session.dataTask(with: request) { [weak self] data, response, error in
-      guard let self = self else { return }
+  //   let task = session.dataTask(with: request) { [weak self] data, response, error in
+  //     guard let self = self else { return }
 
-      if let error = error {
-        self.handleNetworkError(error, context: "Gateway Transport")
-        completion(.failure(error))
-        return
-      }
+  //     if let error = error {
+  //       self.handleNetworkError(error, context: "Gateway Transport")
+  //       completion(.failure(error))
+  //       return
+  //     }
 
-      guard let httpResponse = response as? HTTPURLResponse else { return }
+  //     guard let httpResponse = response as? HTTPURLResponse else { return }
 
-      var responseJSON: [String: Any] = [:]
-      if let data = data {
-        responseJSON = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-      }
+  //     var responseJSON: [String: Any] = [:]
+  //     if let data = data {
+  //       responseJSON = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+  //     }
 
-      if (200...299).contains(httpResponse.statusCode) {
-        completion(.success(responseJSON))
-      } else {
-        let msg = "HTTP \(httpResponse.statusCode)"
-        Logger.e("Gateway error: \(msg)")
-        completion(.failure(NSError(domain: "Gateway", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])))
-      }
-    }
-    task.resume()
-  }
+  //     if (200...299).contains(httpResponse.statusCode) {
+  //       completion(.success(responseJSON))
+  //     } else {
+  //       let msg = "HTTP \(httpResponse.statusCode)"
+  //       Logger.e("Gateway error: \(msg)")
+  //       completion(.failure(NSError(domain: "Gateway", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: msg])))
+  //     }
+  //   }
+  //   task.resume()
+  // }
 
   private func handleNetworkError(_ error: Error, context: String) {
     sdkTracker.error(.networkError, "\(context) error: \(error.localizedDescription)", error)

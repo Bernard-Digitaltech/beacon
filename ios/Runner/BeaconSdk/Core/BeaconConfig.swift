@@ -1,7 +1,7 @@
 import Foundation
 
 public struct BeaconConfig {
-    public var gatewayUrl: String
+    //public var gatewayUrl: String
     public var dataUrl: String
     public var userId: String
     public var rssiThreshold: Int
@@ -11,7 +11,6 @@ public struct BeaconConfig {
     public var notificationCooldown: Int 
 
     public init(
-        gatewayUrl: String,
         dataUrl: String,
         userId: String,
         rssiThreshold: Int = -85,
@@ -20,7 +19,6 @@ public struct BeaconConfig {
         betweenScanPeriod: Int = 5000,
         notificationCooldown: Int = 60000
     ) {
-        self.gatewayUrl = gatewayUrl
         self.dataUrl = dataUrl
         self.userId = userId
         self.rssiThreshold = rssiThreshold

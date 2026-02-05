@@ -241,19 +241,19 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       return 
     }
 
-    gatewayClient.sendDetection(mac: mac, rssi: rssi, timestamp: now) { [weak self] response in 
+    // gatewayClient.sendDetection(mac: mac, rssi: rssi, timestamp: now) { [weak self] response in 
 
-      if let shouldNotify = response["trigger_noti"] as? Bool, shouldNotify {
-        self?.triggerLocalNotification(title: "Beacon Detected", body: "You are near \(name)")
-        self?.prefs.setLastNotification(uuid: uuid, timestamp: now)
-        self?.sendEvent("beaconDetected", data: [
-          "mac": mac,
-          "locationName": name,
-          "rssi": rssi,
-          "timestamp": now
-        ])
-      }
-    }
+    //   if let shouldNotify = response["trigger_noti"] as? Bool, shouldNotify {
+    //     self?.triggerLocalNotification(title: "Beacon Detected", body: "You are near \(name)")
+    //     self?.prefs.setLastNotification(uuid: uuid, timestamp: now)
+    //   }
+    // }
+    self?.sendEvent("beaconDetected", data: [
+      "mac": mac,
+      "locationName": name,
+      "rssi": rssi,
+      "timestamp": now
+    ])
   }
 
   private func sendEvent(_ eventName: String, data: [String: Any] = [:]) {

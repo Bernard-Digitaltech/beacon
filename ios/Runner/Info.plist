@@ -53,7 +53,11 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>We need access to the local network to sync data with the backend server.</string>
+	<string>This app needs access to your local network to communicate with the beacon management server for attendance tracking.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>We need backgound location access to detect beacons and record attendance even when app is closed.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

@@ -188,14 +188,14 @@ class NativeBeaconService {
 
       final Map<String, dynamic> config = {
         "userId": userId,
-        "gatewayUrl": dotenv.get('BEACON_GATEWAY_URL', fallback: 'http://192.168.41.1:8000/api/v1/detection/report'),
-        "dataUrl": dotenv.get('BEACON_DATA_URL', fallback: 'http://192.168.41.1:8000/api/v1/beacons'),
+        //"gatewayUrl": dotenv.get('BEACON_GATEWAY_URL', fallback: 'http://192.168.1.157:8000/api/v1/detection/report'),
+        "dataUrl": dotenv.get('BEACON_DATA_URL', fallback: 'http://192.168.1.157:8000/api/v1/beacons'),
         "rssiThreshold": int.parse(dotenv.get('BEACON_RSSI_THRESHOLD', fallback: '-85')),
         "timeThreshold": int.parse(dotenv.get('BEACON_TIME_THRESHOLD', fallback: '2')),
       };
 
-      if (config['gatewayUrl'].isEmpty && config['dataUrl'].isEmpty) {
-        _log('❌ [Dart] BEACON_GATEWAY_URL or BEACON_DATA_URL missing in .env');
+      if (config['dataUrl'].isEmpty) {
+        _log('❌ [Dart] BEACON_DATA_URL missing in .env');
         return false;
       }
 
@@ -243,11 +243,14 @@ class NativeBeaconService {
   // CHECK SHIFT TIME
   // ============================================================
 
-  Future<void> fetchAndSetBestShift() async {
-    try {
-      final response = await http.get(Uri.parse(dotenv.get('SHIFT_TIME_URL', fallback: 'http://192.168.41.1:8000/api/v1/shifts')));
-      if (response.statusCode == 200) {
-        final List<dynamic> shifts = json.decode(response.body)['data'];
+  Future<bool> fetchAndSetBestShift({int maxRetries = 3}) async {
+    int attempts = 0;
+
+    while (attempts < maxRetries) {
+      try {
+        final response = await http.get(Uri.parse(dotenv.get('SHIFT_TIME_URL', fallback: 'http://192.168.1.157:8000/api/v1/shifts')));
+        if (response.statusCode == 200) {
+          final List<dynamic> shifts = json.decode(response.body)['data'];
         
         final now = DateTime.now();
         final currentHour = now.hour;
@@ -261,11 +264,20 @@ class NativeBeaconService {
         _activeShiftStartTime = shifts.first['start_time'];
         _activeShiftEndTime = shifts.first['end_time'];
         _log("Fetched closest start time $_activeShiftStartTime, end time $_activeShiftEndTime");
+        return true;
       }
     } catch (e) {
-      _log("❌ Shift Sync Error: $e");
+      attempts ++;
+      _log("❌ Shift Shift Error (Attempt $attempts/$maxRetries): $e");
+      if (attempts < maxRetries) {
+        await Future.delayed(const Duration(seconds: 2));
+        continue;
+      }
     }
   }
+  _log("❌ Shift Sync Error.");
+  return false;
+}
 
   /// The UI calls THIS function now
   Future<bool> isDetectionValid(int timestamp) async {
