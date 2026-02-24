@@ -115,16 +115,30 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     let uniqueUUIDs = Set(targetBeacons.keys.map { key -> String in
         return key.components(separatedBy: ":")[0] 
     })
+
     // 2. Create ONE region per UUID
-    monitoredRegions = uniqueUUIDs.compactMap{(uuidStr, name) -> CLBeaconRegion? in 
-      guard let uuid = UUID(uuidString: uuidStr) else {return nil}
+    monitoredRegions = uniqueUUIDs.compactMap{ uuidStr -> CLBeaconRegion? in 
+      let cleanUUID = uuidStr.trimmingCharacters(in: .whitespacesAndNewlines)
+
+      guard let uuid = UUID(uuidString: cleanUUID) else {
+        Logger.e("Invalid UUID: \(uuidStr)")
+        return nil
+      }
+
       let constraint = CLBeaconIdentityConstraint(uuid: uuid)
-      let region = CLBeaconRegion(beaconIdentityConstraint: constraint, identifier: uuidStr)
+      let region = CLBeaconRegion(beaconIdentityConstraint: constraint, identifier: cleanUUID)
       region.notifyOnEntry = true
       region.notifyOnExit = true
       region.notifyEntryStateOnDisplay = true
+
+      Logger.i("Region created: \(uuid.uuidString)")
       return region
-      }
+    }
+
+    if monitoredRegions.isEmpty {
+      Logger.e("No regions created")
+      return
+    }
 
     for region in monitoredRegions {
       locationManager?.startMonitoring(for: region)
@@ -210,6 +224,14 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
 
     if let beaconRegion = region as? CLBeaconRegion {
       manager.stopRangingBeacons(satisfying: beaconRegion.beaconIdentityConstraint)
+
+      // let uuidStr = region.identifier
+      // let removed = activeRegions.filter { $0.hasPrefix(uuidStr) }
+
+      // for key in removed {
+      //   activeRegions.remove(key)
+      //   Logger.i("Removed beacon: \(key) (Exited Region)")
+      // }
     }
 
     sendEvent("regionExit", data:["regionId": region.identifier])
@@ -217,7 +239,10 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
 
   func locationManager(_ manager: CLLocationManager, didRange beacons: [CLBeacon], satisfying constraint: CLBeaconIdentityConstraint){
     watchdog.notifyScan()
-    if beacons.isEmpty {return}
+    if beacons.isEmpty {
+      Logger.i("No beacons found in region")
+      return
+    }
 
     for beacon in beacons {
       let uuid = beacon.uuid.uuidString.uppercased()
@@ -228,6 +253,8 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       let specificKey = getBeaconKey(uuid: uuid, major: major, minor: minor)
 
       let name = targetBeacons[specificKey] ?? targetBeacons[uuid] ?? "Unknown Beacon"
+
+      Logger.i("Found beacon: \(name) | RSSI: \(rssi)")
 
       detectionEngine.processBeacon(
         mac: specificKey, 

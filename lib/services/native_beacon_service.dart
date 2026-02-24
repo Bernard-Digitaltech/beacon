@@ -195,21 +195,21 @@ class NativeBeaconService {
   // MONITORING CONTROL 
   // ============================================================
 
-  Future<bool> startMonitoring({required String userId, required String authToken}) async {
+  Future<bool> startMonitoring({required String userId}) async {
     try {
       _log('🟢 [Dart] Starting monitoring for User: $userId');
 
       final Map<String, dynamic> config = {
         "userId": userId,
-        "authToken": authToken, 
+        //"authToken": authToken, 
         //"gatewayUrl": dotenv.get('BEACON_GATEWAY_URL'),
         "dataUrl": dotenv.get('BEACON_DATA_URL'),
-        "notiUrl": dotenv.get('NOTI_URL'),
+        //"notiUrl": dotenv.get('NOTI_URL'),
         "rssiThreshold": int.parse(dotenv.get('BEACON_RSSI_THRESHOLD', fallback: '-85')),
         "timeThreshold": int.parse(dotenv.get('BEACON_TIME_THRESHOLD', fallback: '1')),
       };
 
-      if ( config['notiUrl'].isEmpty || config['dataUrl'].isEmpty) {
+      if ( config['dataUrl'].isEmpty) {
         _log('❌ [Dart] BEACON_DATA_URL or NOTI_URL is missing in .env');
         return false;
       }

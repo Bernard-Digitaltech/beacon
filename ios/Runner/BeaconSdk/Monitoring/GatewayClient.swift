@@ -80,7 +80,7 @@ class GatewayClient {
           self.prefs.saveTargets(beaconMap)
           completion(beaconMap)
         } else {
-          ompletion(self.prefs.getTargetBeacons())
+          completion(self.prefs.getTargetBeacons())
         }
       } catch {
         self.handleNetworkError(error, context: "JSON Parse")

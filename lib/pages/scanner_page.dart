@@ -63,7 +63,9 @@ class _BeaconScannerPageState extends State<BeaconScannerPage>
     } catch (e) {
       AppLogger().addLog("❌ [UI] Initialization error: $e");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 

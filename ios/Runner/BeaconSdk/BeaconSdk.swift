@@ -90,19 +90,13 @@ public class BeaconSDK: NSObject {
     }
   }
   
-  public func addTarget(mac: String, name: String) {
+  public func addTarget(uuid: String, major: Int?, minor: Int?, name: String) {
     sdkTracker.step("SDK.addTarget")
-    let components = mac.components(separatedBy: ":")
-    guard let uuid = components.first, !uuid.isEmpty else {
-        Logger.e("Invalid target MAC format: \(mac)")
-        sdkTracker.error(.inputError, "Invalid target input: \(mac)")
-        return
+    do {
+      monitor.addTarget(uuid: uuid, major: major, minor: minor, name: name)
+    } catch {
+      sdkTracker.error(.inputError, "Invalid target input.", error)
     }
-    
-    let major = components.count > 1 ? Int(components[1]) : nil
-    let minor = components.count > 2 ? Int(components[2]) : nil
-
-    monitor.addTarget(uuid: uuid, major: major, minor: minor, name: name)
   }
 
   public func clearTargets() {

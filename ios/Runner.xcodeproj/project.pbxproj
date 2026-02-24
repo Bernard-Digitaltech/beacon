@@ -27,6 +27,7 @@
 		6C7D0CE42F29A57400F87081 /* Watchdog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C7D0CC32F29A57400F87081 /* Watchdog.swift */; };
 		6C7D0CE52F29A57400F87081 /* SdkErrorCodes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C7D0CC82F29A57400F87081 /* SdkErrorCodes.swift */; };
 		6C7D0CE62F29A57400F87081 /* BeaconInitializer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C7D0CC12F29A57400F87081 /* BeaconInitializer.swift */; };
+		6CC833072F4D4246002031DD /* FluttterBackgroundExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC833062F4D423C002031DD /* FluttterBackgroundExecutor.swift */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		95085D0A1CF887021EA3A4C7 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DF0E1AE81CB0686D1F3FCE10 /* Pods_Runner.framework */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
@@ -85,6 +86,7 @@
 		6C7D0CD22F29A57400F87081 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
 		6C7D0CD42F29A57400F87081 /* BeaconSdk.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BeaconSdk.swift; sourceTree = "<group>"; };
 		6C7D0CD52F29A57400F87081 /* FlutterBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FlutterBridge.swift; sourceTree = "<group>"; };
+		6CC833062F4D423C002031DD /* FluttterBackgroundExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FluttterBackgroundExecutor.swift; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
@@ -270,6 +272,7 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				6CC833062F4D423C002031DD /* FluttterBackgroundExecutor.swift */,
 				6C7D0CD62F29A57400F87081 /* BeaconSdk */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
@@ -531,6 +534,7 @@
 				6C7D0CE42F29A57400F87081 /* Watchdog.swift in Sources */,
 				6C7D0CE52F29A57400F87081 /* SdkErrorCodes.swift in Sources */,
 				6C7D0CE62F29A57400F87081 /* BeaconInitializer.swift in Sources */,
+				6CC833072F4D4246002031DD /* FluttterBackgroundExecutor.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

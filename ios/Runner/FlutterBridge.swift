@@ -63,13 +63,14 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
 
     case "addTargetBeacon":
       guard let args = call.arguments as? [String: Any],
-            let mac = args["macAddress"] as? String,
-            let name = args["locationName"] as? String else {
-        result(FlutterError(code: "INVALID_ARGS", message: "MAC or Name missing", details: nil))
+          let uuid = args["uuid"] as? String,
+          let major = args["major"] as? Int,
+          let minor = args["minor"] as? Int,
+          let name = args["locationName"] as? String else {
+        result(FlutterError(code: "INVALID_ARGS", message: "UUID, Major, Minor or Name missing", details: nil))
         return
       }
-
-      sdk.addTarget(mac: mac, name: name)
+      sdk.addTarget(uuid: uuid, major: major, minor: minor, name: name)
       result(true)
 
     case "isMonitoring":
@@ -143,9 +144,11 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
       guard let self = self else { return }
       if let sink = self.eventSink {
         sink(data)
+        Logger.i("📥 [FlutterBridge] Sending event to Flutter: \(data)")
       } else {
         if let event = data["event"] as? String, 
            ["regionEnter", "beaconRanged", "beaconDetected", "offlineDetection"].contains(event) {
+            Logger.i("📥 [Background] Sending event to Flutter: \(data)")
             
             let cleanData = data.compactMapValues { $0 }
             FlutterBackgroundExecutor.shared.execute(beaconData: cleanData)
