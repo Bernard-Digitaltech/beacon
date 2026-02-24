@@ -8,7 +8,9 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   private let prefs: PreferenceStore
   private let lifecycle: BeaconLifecycle
   private let watchdog: BeaconWatchdog
-  private let flutterBridge: FlutterBridge
+  //private let flutterBridge: FlutterBridge
+
+  var onEvent: (([String: Any?]) -> Void)?  
 
   private let gatewayClient = GatewayClient()
 
@@ -27,12 +29,10 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   
   init(prefs: PreferenceStore, 
       lifecycle: BeaconLifecycle, 
-      watchdog: BeaconWatchdog, 
-      flutterBridge: FlutterBridge) {
+      watchdog: BeaconWatchdog ) {
     self.prefs = prefs
     self.lifecycle = lifecycle
     self.watchdog = watchdog
-    self.flutterBridge = flutterBridge
     super.init()
 
     self.detectionEngine = DetectionEngine(delegate: self)
@@ -429,7 +429,7 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   private func sendEvent(_ eventName: String, data: [String: Any] = [:]) {
     var payload = data
     payload["event"] = eventName
-    flutterBridge.send(payload)
+    onEvent?(payload)
   }
 
   private func triggerLocalNotification(title: String, body: String) {

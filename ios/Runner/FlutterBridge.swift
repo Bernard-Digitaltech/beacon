@@ -115,7 +115,6 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
       }
         
       UserDefaults.standard.set(handle, forKey: "dispatcher_handle")
-      Logger.i("✅ Background callback handle registered.")
       result(true)
         
     default:
@@ -144,12 +143,10 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
       guard let self = self else { return }
       if let sink = self.eventSink {
         sink(data)
-        Logger.i("📥 [FlutterBridge] Sending event to Flutter: \(data)")
       } else {
         if let event = data["event"] as? String, 
            ["regionEnter", "beaconRanged", "beaconDetected", "offlineDetection"].contains(event) {
-            Logger.i("📥 [Background] Sending event to Flutter: \(data)")
-            
+
             let cleanData = data.compactMapValues { $0 }
             FlutterBackgroundExecutor.shared.execute(beaconData: cleanData)
         }

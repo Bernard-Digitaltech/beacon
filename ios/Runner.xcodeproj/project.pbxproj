@@ -272,7 +272,6 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
-				6CC833062F4D423C002031DD /* FluttterBackgroundExecutor.swift */,
 				6C7D0CD62F29A57400F87081 /* BeaconSdk */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
@@ -283,6 +282,7 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				6C7D0CD52F29A57400F87081 /* FlutterBridge.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
+				6CC833062F4D423C002031DD /* FluttterBackgroundExecutor.swift */,
 			);
 			path = Runner;
 			sourceTree = "<group>";

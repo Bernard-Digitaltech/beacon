@@ -27,26 +27,26 @@ public class BeaconSDK: NSObject {
 
   private var currentConfig: BeaconConfig?
 
+  private lazy var monitor: BeaconRegionMonitor = {
+    let m = BeaconRegionMonitor(
+      prefs: prefs,
+      lifecycle: lifecycle,
+      watchdog: watchdog
+    ) 
+    m.onEvent = {[weak self] data in
+        self?.eventSink?(data)
+      }
+    return m
+  }()
+
   // private lazy var monitor: BeaconRegionMonitor = {
   //   return BeaconRegionMonitor(
   //     prefs: prefs,
   //     lifecycle: lifecycle,
   //     watchdog: watchdog,
-      
-  //     onEvent: {[weak self] data in
-  //       self?.eventSink?(data)
-  //     }
+  //     flutterBridge: FlutterBridge.shared
   //   )
   // }()
-
-  private lazy var monitor: BeaconRegionMonitor = {
-    return BeaconRegionMonitor(
-      prefs: prefs,
-      lifecycle: lifecycle,
-      watchdog: watchdog,
-      flutterBridge: FlutterBridge.shared
-    )
-  }()
 
   private override init() {
     super.init()
