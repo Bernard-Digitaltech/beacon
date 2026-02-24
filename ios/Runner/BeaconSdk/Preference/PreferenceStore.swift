@@ -8,6 +8,7 @@ class PreferenceStore {
   private let KEY_CONFIG = "sdk_config"
   private let KEY_TARGET_BEACONS = "target_beacons"
   private let KEY_LAST_NOTIFY_PREFIX = "last_notify_"
+  private let KEY_OFFLINE_LOGS = "offline_logs"
   
   func setMonitoringEnabled(_ enabled: Bool) {
       defaults.set(enabled, forKey: KEY_MONITORING_ENABLED)
@@ -97,6 +98,40 @@ class PreferenceStore {
   
   func removeTargets() {
     defaults.removeObject(forKey: KEY_TARGET_BEACONS)
+  }
+
+  func addOfflineLog(mac: String, timestamp: Int64) {
+    var logs = getOfflineLogs()
+    let entry: [String: Any] = [
+      "mac": mac,
+      "ts": timestamp
+    ]
+    logs.append(entry)
+    
+    if let jsonData = try? JSONSerialization.data(withJSONObject: logs, options: []),
+      let jsonString = String(data: jsonData, encoding: .utf8) {
+      defaults.set(jsonString, forKey: KEY_OFFLINE_LOGS)
+    }
+  }
+
+  func getOfflineLogs() -> [[String: Any]] {
+    guard let jsonString = defaults.string(forKey: KEY_OFFLINE_LOGS),
+      let jsonData = jsonString.data(using: .utf8) else {
+    return []
+    }
+      
+    do {
+      if let jsonArray = try JSONSerialization.jsonObject(with: jsonData, options: []) as? [[String: Any]] {
+        return jsonArray
+      }
+    } catch {
+      Logger.e("Failed to parse offline logs", error)
+    }
+    return []
+  }
+
+  func clearOfflineLogs() {
+    defaults.removeObject(forKey: KEY_OFFLINE_LOGS)
   }
 
   func getLastNotification(mac: String) -> Int64 {

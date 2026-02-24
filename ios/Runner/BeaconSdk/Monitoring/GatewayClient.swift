@@ -6,9 +6,11 @@ class GatewayClient {
   private var config: BeaconConfig?
   private let session: URLSession
   private let sdkTracker = SdkTracker()
-
+  private let prefs = PreferenceStore()
+  
   typealias JSONCallback = ([String: Any]) -> Void
   typealias BeaconsCallback = ([String: String]) -> Void
+  typealias GatewayCallback = (Result<[String: Any], Error>) -> Void
 
   init() {
     let sessionConfig = URLSessionConfiguration.default
@@ -26,7 +28,7 @@ class GatewayClient {
           let url = URL(string: dataUrlString),
           dataUrlString.hasPrefix("http") else {
       Logger.e("Invalid data URL")
-      completion([:])
+      completion(prefs.getTargetBeacons())
       return
     }
 
@@ -39,13 +41,13 @@ class GatewayClient {
 
       if let error = error {
         self.handleNetworkError(error, context: "Fetch Beacons")
-        completion([:])
+        completion(self.prefs.getTargetBeacons())
         return
       }
 
       guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200, let data = data else {
         Logger.e("Failed to fetch beacons, status: \((response as? HTTPURLResponse)?.statusCode ?? 0)")
-        completion([:])
+        completion(self.prefs.getTargetBeacons())
         return
       }
 
@@ -75,13 +77,14 @@ class GatewayClient {
           }
             
           Logger.i("Fetched \(beaconMap.count) beacons from server")
+          self.prefs.saveTargets(beaconMap)
           completion(beaconMap)
         } else {
-          completion([:])
+          ompletion(self.prefs.getTargetBeacons())
         }
       } catch {
         self.handleNetworkError(error, context: "JSON Parse")
-        completion([:])
+        completion(self.prefs.getTargetBeacons())
       }
     }
     task.resume()

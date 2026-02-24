@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
+import 'package:flutter/widgets.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
@@ -60,6 +62,17 @@ class NativeBeaconService {
 
       final result = await _methodChannel.invokeMethod('initialize');
       _log('📱 [Dart] Native: ${result['message']}');
+
+      // REGISTER THE BACKGROUND HANDLE 
+      final CallbackHandle? handle = PluginUtilities.getCallbackHandle(beaconBackgroundDispatcher);
+      if (handle != null) {
+        await _methodChannel.invokeMethod('registerBackgroundCallback', {
+          'callbackHandle': handle.toRawHandle()
+        });
+        _log('✅ [Dart] Background callback registered (Handle: ${handle.toRawHandle()})');
+      } else {
+        _log('❌ [Dart] Failed to get background callback handle');
+      }
 
       _startEventListening();
       _setupNavigationChannel();
@@ -182,20 +195,22 @@ class NativeBeaconService {
   // MONITORING CONTROL 
   // ============================================================
 
-  Future<bool> startMonitoring({required String userId}) async {
+  Future<bool> startMonitoring({required String userId, required String authToken}) async {
     try {
       _log('🟢 [Dart] Starting monitoring for User: $userId');
 
       final Map<String, dynamic> config = {
         "userId": userId,
-        //"gatewayUrl": dotenv.get('BEACON_GATEWAY_URL', fallback: 'http://192.168.1.157:8000/api/v1/detection/report'),
-        "dataUrl": dotenv.get('BEACON_DATA_URL', fallback: 'http://192.168.1.157:8000/api/v1/beacons'),
+        "authToken": authToken, 
+        //"gatewayUrl": dotenv.get('BEACON_GATEWAY_URL'),
+        "dataUrl": dotenv.get('BEACON_DATA_URL'),
+        "notiUrl": dotenv.get('NOTI_URL'),
         "rssiThreshold": int.parse(dotenv.get('BEACON_RSSI_THRESHOLD', fallback: '-85')),
-        "timeThreshold": int.parse(dotenv.get('BEACON_TIME_THRESHOLD', fallback: '2')),
+        "timeThreshold": int.parse(dotenv.get('BEACON_TIME_THRESHOLD', fallback: '1')),
       };
 
-      if (config['dataUrl'].isEmpty) {
-        _log('❌ [Dart] BEACON_DATA_URL missing in .env');
+      if ( config['notiUrl'].isEmpty || config['dataUrl'].isEmpty) {
+        _log('❌ [Dart] BEACON_DATA_URL or NOTI_URL is missing in .env');
         return false;
       }
 
@@ -515,4 +530,35 @@ class NativeBeaconService {
     _debugController.close();
     _isInitialized = false;
   }
+}
+
+// ============================================================
+// HEADLESS BACKGROUND DISPATCHER (Must be top-level)
+// ============================================================
+@pragma('vm:entry-point')
+void beaconBackgroundDispatcher() async {
+  // 1. Initialize Flutter bindings for the background isolate
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // 2. IMPORTANT: Reload environment variables because this isolate shares NO memory with the main app!
+  try {
+    await dotenv.load(); 
+  } catch (e) {
+    print("👻 [Background] Failed to load .env: $e");
+  }
+
+  // 3. Set up the background listener channel
+  const MethodChannel backgroundChannel = MethodChannel('com.xenber.frontend_v2/beacon_background');
+
+  backgroundChannel.setMethodCallHandler((MethodCall call) async {
+    if (call.method == 'onBackgroundBeaconDetected') {
+      final args = Map<String, dynamic>.from(call.arguments ?? {});
+      print("👻 [Background] HEADLESS DETECTED BEACON: $args");
+      
+      // TODO: Add your background logic here. 
+      // Example: 
+      // final dataUrl = dotenv.get('BEACON_DATA_URL');
+      // await http.post(Uri.parse(dataUrl), body: jsonEncode(args));
+    }
+  });
 }

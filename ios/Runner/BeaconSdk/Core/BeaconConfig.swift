@@ -16,7 +16,7 @@ public struct BeaconConfig {
         rssiThreshold: Int = -85,
         timeThreshold: Int = 2,
         scanPeriod: Int = 1100,
-        betweenScanPeriod: Int = 5000,
+        betweenScanPeriod: Int = 3000,
         notificationCooldown: Int = 60000
     ) {
         self.dataUrl = dataUrl

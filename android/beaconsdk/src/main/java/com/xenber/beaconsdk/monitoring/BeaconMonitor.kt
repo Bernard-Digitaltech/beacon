@@ -172,7 +172,7 @@ class BeaconMonitor(
     ) {
         if (!withinShift) {
             Logger.i("Detection ignored: outside shift window")
-            sendEvent("OutsideShiftDetection", mapOf(
+            sendEvent("outsideShiftDetection", mapOf(
                 "macAddress" to mac,
                 "locationName" to locationName,
                 "avgRssi" to avgRssi,

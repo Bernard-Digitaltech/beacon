@@ -1,15 +1,14 @@
 import Foundation
 import CoreLocation
 import UIKit
+import Network
 
 class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineDelegate {
 
   private let prefs: PreferenceStore
   private let lifecycle: BeaconLifecycle
   private let watchdog: BeaconWatchdog
-
-  private var onEvent: ([String: Any?]) -> Void
-  //private let flutterBridge: FlutterBridge
+  private let flutterBridge: FlutterBridge
 
   private let gatewayClient = GatewayClient()
 
@@ -17,35 +16,51 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   private var locationManager: CLLocationManager?
   private var monitoredRegions: [CLBeaconRegion] = []
   private var targetBeacons: [String: String] = [:]
-  private var activeRegions: Set<String> = []
 
   private var config: BeaconConfig?
   private var isMonitoring = false
   private var withinShift = false
+
+  // Network monitor for offline mode
+  private let networkMonitor = NWPathMonitor()
+  private var isConnected = true
   
   init(prefs: PreferenceStore, 
-    lifecycle: BeaconLifecycle, 
-    watchdog: BeaconWatchdog, 
-    onEvent: @escaping ([String: Any?]) -> Void) {
-      self.onEvent = onEvent
-      self.prefs = prefs
-      self.lifecycle = lifecycle
-      self.watchdog = watchdog
-      self.onEvent = onEvent
-      super.init()
+      lifecycle: BeaconLifecycle, 
+      watchdog: BeaconWatchdog, 
+      flutterBridge: FlutterBridge) {
+    self.prefs = prefs
+    self.lifecycle = lifecycle
+    self.watchdog = watchdog
+    self.flutterBridge = flutterBridge
+    super.init()
 
-      self.detectionEngine = DetectionEngine(delegate: self)
+    self.detectionEngine = DetectionEngine(delegate: self)
 
-      self.watchdog.onTimeout = { [weak self] in 
-        Logger.e("Watchdog triggered restart.")
-        self?.restartMonitoring()
-      }
+    self.watchdog.onTimeout = { [weak self] in 
+      Logger.e("Watchdog triggered restart.")
+      self?.restartMonitoring()
+    }
+    // Initialize Network Monitor
+    networkMonitor.pathUpdateHandler = { [weak self] path in
+        self?.isConnected = (path.status == .satisfied)
+    }
+    networkMonitor.start(queue: DispatchQueue.global(qos: .background))
   }
 
   func applyConfig(_ config: BeaconConfig) {
     self.config = config
     gatewayClient.configure(config)
     detectionEngine.configure(config)
+
+    // Load beacons data from local storage first
+    let localTargets = prefs.getTargetBeacons()
+    if !localTargets.isEmpty {
+        self.targetBeacons = localTargets
+        Logger.i("Loaded \(localTargets.count) targets from local storage.")
+    } else {
+        Logger.e("Local storage empty. Waiting for server sync.")
+    }
 
     Logger.i("BeaconMonitor: Config applied")
     getTargetFromServer()
@@ -66,6 +81,7 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   func clearTargets() {
     stop()
     targetBeacons.removeAll()
+    prefs.removeTargets()
     Logger.i("All target beacons cleared")
   }
 
@@ -100,28 +116,15 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
         return key.components(separatedBy: ":")[0] 
     })
     // 2. Create ONE region per UUID
-    monitoredRegions = uniqueUUIDs.compactMap{ uuidStr -> CLBeaconRegion? in 
-      let cleanUUID = uuidStr.trimmingCharacters(in: .whitespacesAndNewlines)
-
-      guard let uuid = UUID(uuidString: cleanUUID) else {
-        Logger.e("Invalid UUID: \(uuidStr)")
-        return nil
-      }
-
+    monitoredRegions = uniqueUUIDs.compactMap{(uuidStr, name) -> CLBeaconRegion? in 
+      guard let uuid = UUID(uuidString: uuidStr) else {return nil}
       let constraint = CLBeaconIdentityConstraint(uuid: uuid)
-      let region = CLBeaconRegion(beaconIdentityConstraint: constraint, identifier: cleanUUID)
+      let region = CLBeaconRegion(beaconIdentityConstraint: constraint, identifier: uuidStr)
       region.notifyOnEntry = true
       region.notifyOnExit = true
       region.notifyEntryStateOnDisplay = true
-
-      Logger.i("Region created: \(uuid.uuidString)")
       return region
-    }
-
-    if monitoredRegions.isEmpty {
-      Logger.e("No regions created")
-      return
-    }
+      }
 
     for region in monitoredRegions {
       locationManager?.startMonitoring(for: region)
@@ -133,10 +136,6 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     watchdog.start()
 
     sendEvent("monitoringStarted", data: ["targetCount": targetBeacons.count])
-    // gatewayClient.sendEvent("SCAN_STARTED", data: [
-    //   "device_model": UIDevice.current.model,
-    //   "os_version": UIDevice.current.systemVersion
-    // ])
   }
 
   func stop() {
@@ -148,16 +147,11 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       locationManager?.stopMonitoring(for: region)
       locationManager?.stopRangingBeacons(satisfying: region.beaconIdentityConstraint)
     }
-
-    //activeRegions.removeAll()
+    
     watchdog.stop()
     isMonitoring = false
     
     sendEvent("monitoringStopped")
-    // gatewayClient.sendEvent("SCAN_STOPPED", data: [
-    //   "device_model": UIDevice.current.model,
-    //   "os_version": UIDevice.current.systemVersion
-    // ])
   }
 
   private func restartMonitoring() {
@@ -179,32 +173,23 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     return withinShift
   }
 
-  private func getTargetFromServer(retryCount: Int = 0) {
-    // Small delay to allow network/permissions to settle
-    let delay = (retryCount == 0) ? 2.0 : 5.0
-    
-    DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-      guard let self = self else { return }
+  private func getTargetFromServer() {
+    gatewayClient.fetchBeacons{[weak self] serverBeacons in
+      guard let self = self else {return}
       
-      Logger.i("Fetching beacon targets (Attempt \(retryCount + 1))...")
-      
-      self.gatewayClient.fetchBeacons { [weak self] serverBeacons in
-        guard let self = self else { return }
-        
-        if !serverBeacons.isEmpty {
-          self.targetBeacons = serverBeacons
-          Logger.i("Fetched \(serverBeacons.count) beacon targets from server")
-          if !self.isMonitoring {
-            self.start()
-          }
+      if !serverBeacons.isEmpty {
+        self.targetBeacons = serverBeacons
+        self.prefs.saveTargets(serverBeacons)
+        Logger.i("Fetched \(serverBeacons.count) beacon targets from server")
+
+        if !self.isMonitoring {
+          self.start()
         } else {
-          if retryCount < 3 {
-            Logger.w("Fetch failed or empty, retrying in 5s...")
-            self.getTargetFromServer(retryCount: retryCount + 1)
-          } else {
-            Logger.e("Server returned empty or reachable after multiple retries")
-          }
+          Logger.i("Updating active regions with new server targets")
+          self.restartMonitoring()
         }
+      } else {
+        Logger.i("Server returned empty beacon list.")
       }
     }
   }
@@ -225,13 +210,6 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
 
     if let beaconRegion = region as? CLBeaconRegion {
       manager.stopRangingBeacons(satisfying: beaconRegion.beaconIdentityConstraint)
-      let uuidStr = region.identifier
-      let removed = activeRegions.filter { $0.hasPrefix(uuidStr) }
-
-      for key in removed {
-        activeRegions.remove(key)
-        Logger.i("Removed beacon: \(key) (Exited Region)")
-      }
     }
 
     sendEvent("regionExit", data:["regionId": region.identifier])
@@ -325,8 +303,58 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   }
 
   func onBeaconDetected(mac: String, locationName: String, avgRssi: Int, timestamp: Int64, battery: Int?) {
-    Logger.i("Beacon detected: \(mac) - \(locationName) - \(avgRssi) ")
-    processDetection(mac: mac, name: locationName, rssi: avgRssi)
+
+    let online = isOnline()
+
+    if !online {
+      Logger.w("Offline: Caching detection for \(mac)")
+      prefs.addOfflineLog(mac: mac, timestamp: timestamp)
+      sendEvent("offlineDetection", data: [
+        "mac": mac,
+        "locationName": locationName,
+        "avgRssi": avgRssi, 
+        "timestamp": timestamp,
+        "battery": battery ?? -1
+      ])
+      triggerLocalNotification(title: "Check In", body: "You are near \(locationName)")
+      return
+    }
+
+    if !withinShift {
+      Logger.d("Detection ignored: Outside shift")
+      sendEvent("OutsideShiftDetection", data: [
+        "mac": mac,
+        "locationName": locationName,
+        "avgRssi": avgRssi, 
+        "timestamp": timestamp,
+        "battery": battery ?? -1
+      ])
+      return
+    }
+    guard let config = config else { return }
+    let now = Int64(Date().timeIntervalSince1970 * 1000)
+    let lastNotif = prefs.getLastNotification(mac: mac)
+    let cooldown = Int64(config.notificationCooldown)
+    
+    if (now - lastNotif) < cooldown {
+      Logger.i("💪 Cooldown active for \(locationName)")
+      return 
+    }
+
+    prefs.setLastNotification(mac: mac, timestamp: now)
+    
+    sendEvent("beaconDetected", data: [
+      "macAddress": mac,
+      "locationName": locationName,
+      "avgRssi": avgRssi,
+      "timestamp": timestamp,
+      "battery": battery ?? -1
+    ])
+      
+    Logger.i("💪Detection event sent [\(mac)]")
+      
+    triggerLocalNotification(title: "Check In", body: "You are near \(locationName)")
+    //processDetection(mac: mac, name: locationName, rssi: avgRssi)
   }
 
   func onBeaconLost(mac: String) {
@@ -341,48 +369,40 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     return u
   }
 
-  private func processDetection(mac: String, name: String, rssi: Int) {
-    guard withinShift else {
-      Logger.d("Detection ignored: Outside shift")
-      return
-    }
+  // private func processDetection(mac: String, name: String, rssi: Int) {
+  //   guard withinShift else {
+  //     Logger.d("Detection ignored: Outside shift")
+  //     return
+  //   }
 
-    if activeRegions.contains(mac) {
-      Logger.d("Duplicated detection ignored: \(mac)")
-      return
-    }
-
-    activeRegions.insert(mac)
-
-
-    let now = Int(Date().timeIntervalSince1970 * 1000)
-    // let lastNotif = prefs.getLastNotification(mac: mac)
-    // let cooldown = config?.notificationCooldown ?? 0
+  //   let now = Int(Date().timeIntervalSince1970 * 1000)
+  //   let lastNotif = prefs.getLastNotification(mac: mac)
+  //   let timeDiff = now - Int(lastNotif)
+  //   let cooldown = config?.notificationCooldown ?? 0
     
-    // if (now - lastNotif) < cooldown {
-    //   return 
-    // }
+  //   if timeDiff < cooldown {
+  //     return 
+  //   }
 
-    // gatewayClient.sendDetection(mac: mac, rssi: rssi, timestamp: now) { [weak self] response in 
+  //   gatewayClient.sendDetection(mac: mac, rssi: rssi, timestamp: now) { [weak self] (response: [String: Any] )in 
 
-    //   if let shouldNotify = response["trigger_noti"] as? Bool, shouldNotify {
-    //     self?.triggerLocalNotification(title: "Beacon Detected", body: "You are near \(name)")
-    //     self?.prefs.setLastNotification(uuid: uuid, timestamp: now)
-    //   }
-    // }
-    self.sendEvent("beaconDetected", data: [
-      "mac": mac,
-      "locationName": name,
-      "rssi": rssi,
-      "timestamp": now
-    ])
-  }
-
+  //     if let shouldNotify = response["trigger_noti"] as? Bool, shouldNotify {
+  //       self?.triggerLocalNotification(title: "Beacon Detected", body: "You are near \(name)")
+  //       self?.prefs.setLastNotification(mac: mac, timestamp: Int64(now))
+  //       self?.sendEvent("beaconDetected", data: [
+  //         "mac": mac,
+  //         "locationName": name,
+  //         "rssi": rssi,
+  //         "timestamp": now
+  //       ])
+  //     }
+  //   }
+  // }
 
   private func sendEvent(_ eventName: String, data: [String: Any] = [:]) {
     var payload = data
     payload["event"] = eventName
-    onEvent(payload)
+    flutterBridge.send(payload)
   }
 
   private func triggerLocalNotification(title: String, body: String) {
@@ -401,5 +421,9 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       "targetCount": targetBeacons.count,
       "userId": config?.userId ?? "none"
     ]
+  }
+
+  private func isOnline() -> Bool {
+    return isConnected
   }
 }
