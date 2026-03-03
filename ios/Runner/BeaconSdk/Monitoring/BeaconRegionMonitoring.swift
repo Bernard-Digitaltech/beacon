@@ -26,6 +26,9 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   // Network monitor for offline mode
   private let networkMonitor = NWPathMonitor()
   private var isConnected = true
+
+  // Hold bg task for iOS 17+ CLMonitor
+  private var monitorTask: Task<Void, Never>?
   
   init(prefs: PreferenceStore, 
       lifecycle: BeaconLifecycle, 
@@ -46,7 +49,36 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
         self?.isConnected = (path.status == .satisfied)
     }
     networkMonitor.start(queue: DispatchQueue.global(qos: .background))
+
+    // CLMonitor : Boot up iOS 17 bg listener
+    if #available(iOS 17.0, *) {
+      startCLMonitor()
+    }
   }
+
+  @available(iOS 17.0, *)
+  private func startCLMonitor() {
+    monitorTask?.cancel() 
+    monitorTask = Task {
+      let clMonitor = await CLMonitor("Kerja101BeaconMonitor")
+
+      // This loop automatically receives events when iOS wakes the app
+      for try await event in await clMonitor.events {
+        guard let uuid = UUID(uuidString: event.identifier) else { continue }
+        let constraint = CLBeaconIdentityConstraint(uuid: uuid)
+
+        if event.state == .satisfied {
+          Logger.i("🚀 CLMonitor: Entered region \(event.identifier)")
+          self.locationManager?.startRangingBeacons(satisfying: constraint)
+          self.sendEvent("regionEnter", data:["regionId": event.identifier])
+        } else if event.state == .unsatisfied {
+          Logger.i("🚀 CLMonitor: Exited region \(event.identifier)")
+          self.locationManager?.stopRangingBeacons(satisfying: constraint)
+          self.sendEvent("regionExit", data:["regionId": event.identifier])
+        }
+      }
+    }
+  }  
 
   func applyConfig(_ config: BeaconConfig) {
     self.config = config
@@ -141,9 +173,22 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     }
 
     for region in monitoredRegions {
-      locationManager?.startMonitoring(for: region)
-      locationManager?.startRangingBeacons(satisfying: region.beaconIdentityConstraint)
-      locationManager?.requestState(for: region)
+      // For iOS 17+ (register CLMonitor in app), iOS will automatically wake the app and trigger events
+      if #available(iOS 17.0, *) {
+        Task {
+          let clMonitor = await CLMonitor("Kerja101BeaconMonitor")
+          let condition = CLMonitor.BeaconIdentityCondition(uuid: region.uuid)
+          await clMonitor.add(condition, identifier: region.identifier)
+        }
+        Logger.i("Registering region with CLMonitor: \(region.identifier)")
+        locationManager?.startRangingBeacons(satisfying: region.beaconIdentityConstraint)
+      } else {
+        // For iOS 16 and below
+        Logger.i("[iOS16] Starting monitoring for region: \(region.identifier)")
+        locationManager?.startMonitoring(for: region)
+        locationManager?.startRangingBeacons(satisfying: region.beaconIdentityConstraint)
+        locationManager?.requestState(for: region)
+      }
     }
 
     isMonitoring = true
@@ -158,14 +203,28 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     Logger.i("Stopping monitoring...")
     
     for region in monitoredRegions {
-      locationManager?.stopMonitoring(for: region)
-      locationManager?.stopRangingBeacons(satisfying: region.beaconIdentityConstraint)
+      if #available(iOS 17.0, *) {
+        Task {
+          let clMonitor = await CLMonitor("Kerja101BeaconMonitor")
+          await clMonitor.remove(identifier: region.identifier)
+        }
+        Logger.i("Unregistering region from CLMonitor: \(region.identifier)")
+      } else {
+        Logger.i("[iOS16] Stopping monitoring for region: \(region.identifier)")
+        locationManager?.stopMonitoring(for: region)
+      }
+        locationManager?.stopRangingBeacons(satisfying: region.beaconIdentityConstraint)
     }
     
     watchdog.stop()
     isMonitoring = false
     
     sendEvent("monitoringStopped")
+  }
+
+  private func stopCLMonitor() {
+    monitorTask?.cancel()
+    monitorTask = nil
   }
 
   private func restartMonitoring() {
@@ -343,7 +402,7 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
         "timestamp": timestamp,
         "battery": battery ?? -1
       ])
-      triggerLocalNotification(title: "Check In", body: "You are near \(locationName)")
+      //triggerLocalNotification(title: "Check In", body: "You are near \(locationName)")
       return
     }
 
@@ -380,7 +439,7 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       
     Logger.i("💪Detection event sent [\(mac)]")
       
-    triggerLocalNotification(title: "Check In", body: "You are near \(locationName)")
+    //triggerLocalNotification(title: "Check In", body: "You are near \(locationName)")
     //processDetection(mac: mac, name: locationName, rssi: avgRssi)
   }
 

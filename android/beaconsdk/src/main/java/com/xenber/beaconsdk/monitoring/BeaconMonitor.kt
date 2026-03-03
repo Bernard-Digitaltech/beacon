@@ -301,7 +301,7 @@ class BeaconMonitor(
                 "monitoringStopped" -> listener.onMonitoringStopped(payload)
                 "regionEnter" -> listener.onRegionEnter(payload)
                 "regionExit" -> listener.onRegionExit(payload)
-                "OutsideShiftDetection" -> listener.onOutsideShiftDetection(payload)
+                "outsideShiftDetection" -> listener.onOutsideShiftDetection(payload)
                 else -> listener.onEvent(event, payload)
             }
         }

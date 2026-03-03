@@ -175,7 +175,6 @@ public class BeaconSDK: NSObject {
     monitor.applyConfig(savedConfig)
     initializer.initialize(config: savedConfig, delegate: monitor)
     
-    monitor.applyConfig(savedConfig)
     state = .configured
 
     if wasMonitoring {

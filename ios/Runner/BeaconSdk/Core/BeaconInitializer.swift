@@ -46,7 +46,6 @@ class BeaconInitializer: NSObject {
     // REQUIRES "Location updates" to be checked in "Signing & Capabilities" -> "Background Modes"
     locationManager.allowsBackgroundLocationUpdates = true
     locationManager.showsBackgroundLocationIndicator = true 
-    
     Logger.i("Background Location Updates ENABLED")
   }
 
