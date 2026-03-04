@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import '../utils/app_logger.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 class NativeBeaconService {
   static NativeBeaconService? _instance;
   static NativeBeaconService get instance =>
@@ -539,6 +541,20 @@ class NativeBeaconService {
 void beaconBackgroundDispatcher() async {
   // 1. Initialize Flutter bindings for the background isolate
   WidgetsFlutterBinding.ensureInitialized();
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  await flutterLocalNotificationsPlugin.initialize(
+    const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+    ),
+  );
+
+  await flutterLocalNotificationsPlugin.show(
+    111,
+    '5: Dart Executed',
+    'The background isolate is running',
+    const NotificationDetails(iOS: DarwinNotificationDetails(presentAlert:true))
+  );
 
   // 2. IMPORTANT: Reload environment variables because this isolate shares NO memory with the main app!
   try {

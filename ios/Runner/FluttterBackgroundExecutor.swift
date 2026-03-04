@@ -10,7 +10,8 @@ class FlutterBackgroundExecutor {
 
     func execute(beaconData: [String: Any]) {
         let handle = UserDefaults.standard.object(forKey: "dispatcher_handle") as? Int64 ?? -1
-        
+        sendDebugNoti("2: Executor Start", "Handle ID: \(handle)")
+
         if handle == -1 {
             Logger.e("No background callback handle found!")
             return
@@ -21,6 +22,9 @@ class FlutterBackgroundExecutor {
                 Logger.e("Fatal: Failed to find callback info.")
                 return
             }
+
+            sendDebugNoti("3: Booting Engine", "Starting headless Dart isolate.")
+
 
             backgroundEngine = FlutterEngine(name: "BeaconBackgroundEngine")
 
@@ -39,7 +43,7 @@ class FlutterBackgroundExecutor {
                 )
             }
         }
-
+        sendDebugNoti("4: Invoking Method", "Invoking background method.")
         backgroundChannel?.invokeMethod("onBackgroundBeaconDetected", arguments: beaconData)
     }
 }

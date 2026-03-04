@@ -124,13 +124,16 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
 
   // Event Handling (iOS -> Flutter)
   public func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+    NSLog("🎧 [FlutterBridge] onListen called - setting up event sink")
     self.eventSink = events
 
     BeaconSDK.shared.setEventCallback { [weak self] (data: [String: Any?]) in
+      NSLog("🎯 [FlutterBridge] BeaconSDK callback triggered with data: \(data)")  
       self?.send(data)
     }
+    NSLog("✅ [FlutterBridge] Event callback registered with BeaconSDK")  
     return nil
-  }
+}
 
   public func onCancel(withArguments arguments: Any?) -> FlutterError? {
     BeaconSDK.shared.setEventCallback(nil)
@@ -145,7 +148,7 @@ public class FlutterBridge: NSObject, FlutterPlugin, FlutterStreamHandler, UNUse
         sink(data)
       } else {
         if let event = data["event"] as? String, 
-           ["regionEnter", "beaconRanged", "beaconDetected", "offlineDetection"].contains(event) {
+           ["regionEnter", "beaconRanged", "beaconDetected", "offlineDetection","outsideShiftDetection"].contains(event) {
 
             let cleanData = data.compactMapValues { $0 }
             FlutterBackgroundExecutor.shared.execute(beaconData: cleanData)

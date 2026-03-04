@@ -49,6 +49,12 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
         self?.isConnected = (path.status == .satisfied)
     }
     networkMonitor.start(queue: DispatchQueue.global(qos: .background))
+      
+    //Create locationManager immediately
+    locationManager = CLLocationManager()
+    locationManager?.delegate = self
+    locationManager?.allowsBackgroundLocationUpdates = true
+    locationManager?.pausesLocationUpdatesAutomatically = false
 
     // CLMonitor : Boot up iOS 17 bg listener
     if #available(iOS 17.0, *) {
@@ -132,12 +138,12 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       return
     }
 
-    if locationManager == nil {
-      locationManager = CLLocationManager()
-      locationManager?.delegate = self
-      locationManager?.allowsBackgroundLocationUpdates = true
-      locationManager?.pausesLocationUpdatesAutomatically = false
-    }
+//    if locationManager == nil {
+//      locationManager = CLLocationManager()
+//      locationManager?.delegate = self
+//      locationManager?.allowsBackgroundLocationUpdates = true
+//      locationManager?.pausesLocationUpdatesAutomatically = false
+//    }
 
     Logger.i("Starting iOS monitoring...")
 
@@ -525,15 +531,23 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
 actor ModernMonitorManager {
     static let shared = ModernMonitorManager()
     
-    private var monitor: CLMonitor?
+    private var monitorTask: Task<CLMonitor, Never>?
     private var isListening = false
     
     // Grabs the monitor ONCE and caches it
     private func getMonitor() async -> CLMonitor {
-        if let m = monitor { return m }
-        let m = await CLMonitor("Kerja101BeaconMonitor")
-        monitor = m
-        return m
+        if let existingTask = monitorTask { 
+          print("✅ CLMonitor: Returning existing task...")
+          return await existingTask.value
+        }
+        print("✅ CLMonitor: Creating new task...")
+        let newTask = Task {
+            let m = await CLMonitor("TestBeaconMonitor")
+            print("✅ CLMonitor: Successfully booted in iOS memory")
+            return m
+        }
+        monitorTask = newTask
+        return await newTask.value
     }
     
     func addCondition(uuid: UUID, identifier: String) async {

@@ -3,9 +3,10 @@
 
     <!-- Allow cleartext traffic to local dev server -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">192.168.1.162</domain>
+        <domain includeSubdomains="true">192.168.1.177</domain>
         <domain includeSubdomains="true">10.79.223.239</domain>
-        <domain includeSubdomains="true">192.168.0.135</domain>
+        <domain includeSubdomains="true">192.168.1.197</domain>
+        <domain includeSubdomains="true">192.168.41.1</domain>
     </domain-config>
 
 </network-security-config>
