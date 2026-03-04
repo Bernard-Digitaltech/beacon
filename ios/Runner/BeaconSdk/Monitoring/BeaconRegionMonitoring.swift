@@ -60,11 +60,9 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   private func startCLMonitor() {
     monitorTask?.cancel() 
     monitorTask = Task {
-      let clMonitor = await CLMonitor("Kerja101BeaconMonitor")
-
-      // This loop automatically receives events when iOS wakes the app
-      for try await event in await clMonitor.events {
-        guard let uuid = UUID(uuidString: event.identifier) else { continue }
+      // Pass a closure to the Actor so it hands us the events safely
+      await ModernMonitorManager.shared.startListening { [weak self] event in
+        guard let self = self, let uuid = UUID(uuidString: event.identifier) else { return }
         let constraint = CLBeaconIdentityConstraint(uuid: uuid)
 
         if event.state == .satisfied {
@@ -176,12 +174,15 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
       // For iOS 17+ (register CLMonitor in app), iOS will automatically wake the app and trigger events
       if #available(iOS 17.0, *) {
         Task {
-          let clMonitor = await CLMonitor("Kerja101BeaconMonitor")
-          let condition = CLMonitor.BeaconIdentityCondition(uuid: region.uuid)
-          await clMonitor.add(condition, identifier: region.identifier)
+          for region in monitoredRegions {
+            // ✅ Safely ask the Actor to add the condition
+            await ModernMonitorManager.shared.addCondition(uuid: region.uuid, identifier: region.identifier)
+            Logger.i("Registering region with CLMonitor: \(region.identifier)")
+          }
         }
-        Logger.i("Registering region with CLMonitor: \(region.identifier)")
-        locationManager?.startRangingBeacons(satisfying: region.beaconIdentityConstraint)
+        for region in monitoredRegions {
+          locationManager?.startRangingBeacons(satisfying: region.beaconIdentityConstraint)
+        }
       } else {
         // For iOS 16 and below
         Logger.i("[iOS16] Starting monitoring for region: \(region.identifier)")
@@ -205,10 +206,15 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
     for region in monitoredRegions {
       if #available(iOS 17.0, *) {
         Task {
-          let clMonitor = await CLMonitor("Kerja101BeaconMonitor")
-          await clMonitor.remove(identifier: region.identifier)
+          for region in monitoredRegions {
+            // ✅ Safely ask the Actor to remove the condition
+            await ModernMonitorManager.shared.removeCondition(identifier: region.identifier)
+            Logger.i("Unregistering region from CLMonitor: \(region.identifier)")
+          }
         }
-        Logger.i("Unregistering region from CLMonitor: \(region.identifier)")
+        for region in monitoredRegions {
+          locationManager?.stopRangingBeacons(satisfying: region.beaconIdentityConstraint)
+        }
       } else {
         Logger.i("[iOS16] Stopping monitoring for region: \(region.identifier)")
         locationManager?.stopMonitoring(for: region)
@@ -512,4 +518,47 @@ class BeaconRegionMonitor: NSObject, CLLocationManagerDelegate, DetectionEngineD
   private func isOnline() -> Bool {
     return isConnected
   }
+}
+
+// ✅ FIX: The Centralized iOS 17 Monitor Manager
+@available(iOS 17.0, *)
+actor ModernMonitorManager {
+    static let shared = ModernMonitorManager()
+    
+    private var monitor: CLMonitor?
+    private var isListening = false
+    
+    // Grabs the monitor ONCE and caches it
+    private func getMonitor() async -> CLMonitor {
+        if let m = monitor { return m }
+        let m = await CLMonitor("Kerja101BeaconMonitor")
+        monitor = m
+        return m
+    }
+    
+    func addCondition(uuid: UUID, identifier: String) async {
+        let m = await getMonitor()
+        let condition = CLMonitor.BeaconIdentityCondition(uuid: uuid)
+        await m.add(condition, identifier: identifier)
+    }
+    
+    func removeCondition(identifier: String) async {
+        let m = await getMonitor()
+        await m.remove(identifier)
+    }
+    
+    func startListening(onEvent: @escaping (CLMonitor.Event) -> Void) async {
+        if isListening { return }
+        isListening = true
+        
+        do {
+            let m = await getMonitor()
+            for try await event in await m.events {
+                onEvent(event)
+            }
+        } catch {
+            Logger.e("❌ CLMonitor stream failed: \(error.localizedDescription)")
+            isListening = false
+        }
+    }
 }
